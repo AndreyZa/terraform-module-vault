@@ -325,6 +325,39 @@ policies = {
 
 `auth/token/create` — право выпускать дочерние токены; именно оно нужно провайдеру `vault`, когда у него не выставлен `skip_child_token`.
 
+### claim_mappings и шаблонные пути
+
+`claim_mappings` кладёт claim'ы из токена в метаданные, имена ключей — любые свои:
+
+```hcl
+claim_mappings = {
+  project_path  = "project" # claim → ключ метаданных
+  ref           = "branch"
+  user_login    = "actor"
+  ref_protected = "protected"
+}
+```
+
+После логина они видны и в токене, и в alias сущности:
+
+```
+actor: andrey   branch: main   project: platform/test-terraform   protected: true
+```
+
+По ним можно строить путь прямо в политике — один шаблон вместо политики на каждый проект:
+
+```hcl
+extra_rules = <<-EOT
+  path "platform-infra/data/{{identity.entity.aliases.auth_jwt_326da3fe.metadata.project}}/*" {
+    capabilities = ["read"]
+  }
+EOT
+```
+
+Accessor метода берётся из `vault auth list -format=json`. Значение со слэшем (`platform/test-terraform`) работает — путь просто становится глубже.
+
+Шаблон Vault пишется в **двойных фигурных скобках** и доллара не содержит, поэтому экранировать в `extra_rules` нечего. `$${...}` — синтаксис Terraform; Vault его не понимает и молча не сматчит путь, политика при этом выглядит правдоподобно.
+
 Пути из `read_paths`, `write_paths` и `list_paths` можно пересекать: правила складываются по путям, и на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities. (Из двух строф на один путь Vault оставляет последнюю — то есть без такой сборки пересечение молча урезало бы права.)
 
 Всё, что не ложится в шаблон (`sys/`, `transit/`, шаблоны с `{{identity.*}}`), пишется файлом в `policy_files_dir`. Файлу через `templatefile` передаются `mount`, `kv_version`, `data_prefix` и `metadata_prefix` (`""`/`""` для v1, `"data/"`/`"metadata/"` для v2), литеральный доллар экранируется удвоением. Осторожно с путями KV в таких файлах: в v1 оба префикса пусты, и версионно-нейтральная запись даёт две одинаковые `path`-строфы, из которых Vault оставит последнюю. Права на KV лучше описывать через `policies`, а файлом — то, что от версии не зависит.
