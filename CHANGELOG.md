@@ -1,0 +1,71 @@
+# Changelog
+
+Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
+
+## [2.0.0] — 2026-07-29
+
+Ревизия по итогам аудита. Общая тема релиза: всё, что раньше молча давало
+неработающую политику или роль, теперь валит `plan`.
+
+Адреса ресурсов не изменились — `moved`-блоки и импорт не нужны. Порядок
+обновления и таблица «было/стало» — в README, раздел «Обновление с 1.x на 2.0».
+
+### Исправлено
+
+- **AppRole был нерабочим целиком.** `auth_approle.tf` читал `token_period` и
+  `token_no_default_policy`, которых не было в типе `approle_roles`, — любой
+  конфиг с непустым `approle_roles` падал на `plan` с `Unsupported attribute`,
+  включая собственный `examples/minimal`. Оба поля добавлены в переменную.
+  `terraform validate` этот класс ошибок не ловит: Terraform не типизирует
+  `each.value` статически.
+- **Опечатка в capability молча обесточивала правило.** Валидация набора прав
+  стояла только на верхнеуровневом `policies`; неизвестное право в
+  `services.path_capabilities`, `*.raw_path_capabilities` и
+  `mounts[*].path_capabilities` выпадало при сборке правил, оставляя строфу
+  `capabilities = []` — Vault такую принимает, прав она не даёт. Проверка
+  распространена на все поля обоих входов.
+- **`mounts[*].kv_version` не проверялся** и при любом значении кроме `2`
+  молча раскрывался как v1 — то есть без префикса `data/`.
+- **Коллизии имён только предупреждали.** `check`-блоки в Terraform не
+  останавливают `apply`: одно имя политики в двух источниках давало `Warning`,
+  после чего `merge()` оставлял последний источник, а остальные определения
+  терялись. Оба `check` заменены на `precondition`.
+- **Проверки TTL были только у JWT-ролей.** `token_ttl` больше
+  `token_explicit_max_ttl` и `token_period` вместе с ненулевым потолком теперь
+  валят `plan` и для kubernetes-, и для AppRole-ролей.
+
+### Добавлено
+
+- `manage_approle_backend` (по умолчанию `true`) — раньше AppRole-бэкенд
+  создавался безусловно, и его нельзя было отдать под уже существующий маунт
+  иначе как через импорт. Дефолт `true`, а не `false` как у `manage_kv_mount`
+  и `manage_jwt_backend`, — чтобы обновление не снесло бэкенд вместе с ролями.
+- `tests/` — 33 прогона `terraform test` без живого Vault (`command = plan`):
+  раскладка путей v1/v2, `allow_destroy`, слияние пересекающихся путей,
+  `raw_path_capabilities`, микс маунтов, все `validation` и `precondition`.
+- `LICENSE` (MIT), `CHANGELOG.md`, CI на GitHub Actions (`fmt`, `validate`,
+  `test`, `validate` каждого примера).
+- Строка `vault_auth_backend.approle[0]` в таблице импорта.
+
+### Изменено
+
+- `vault_approle_auth_backend_role.backend` берётся из `var.approle_path`, а не
+  из `vault_auth_backend.approle[0].path` (иначе при `manage_approle_backend =
+  false` ссылки не на что разрешать). Зависимость сохранена через `depends_on`.
+- `output "approle_login_path"` по той же причине больше не зависит от ресурса
+  бэкенда.
+- README: убрано упоминание `check`, снятого ещё в 1.x (пересечение
+  `read_paths`/`write_paths` намеренно разрешено); «три источника политик» →
+  четыре, `services` тоже их порождает; поправлено число примеров.
+
+### Убрано
+
+- `examples/*/.terraform.lock.hcl` — были закоммичены с единственным хешем
+  `h1:` под `linux_amd64`, из-за чего `terraform init` в примере падал на
+  несоответствии контрольных сумм у всех, кто не на Linux/amd64.
+- Мёртвое правило `!*.example` в `.gitignore`: под `terraform.tfvars` (точное
+  имя) и `*.auto.tfvars` (суффикс) файлы `*.example` и так не попадали.
+
+## [1.7.0] и раньше
+
+Отдельного changelog не велось, история — в `git log` между тегами.

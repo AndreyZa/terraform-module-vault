@@ -14,28 +14,19 @@ resource "vault_policy" "this" {
       condition     = lower(each.key) == each.key
       error_message = "Имя политики ${each.key} должно быть в нижнем регистре: Vault приводит имена к lowercase, иначе Terraform будет вечно видеть diff."
     }
-  }
-}
 
-# Одно имя из нескольких источников (services / policies / policy_files_dir /
-# raw_policies) merge() схлопнул бы молча, оставив последний.
-check "policy_name_collisions" {
-  assert {
-    condition = length(local.duplicate_policy_names) == 0
-    error_message = format(
-      "Имена политик заданы больше чем в одном источнике: %s",
-      join(", ", local.duplicate_policy_names)
-    )
-  }
-}
-
-check "jwt_role_name_collisions" {
-  assert {
-    condition = length(local.duplicate_jwt_role_names) == 0
-    error_message = format(
-      "Имена JWT-ролей заданы и в services, и в jwt_roles: %s",
-      join(", ", local.duplicate_jwt_role_names)
-    )
+    # Одно имя из нескольких источников (services / policies / policy_files_dir /
+    # raw_policies) merge() схлопывает молча, оставляя последний.
+    # До 2.0 здесь стоял check — то есть предупреждение, которое apply не
+    # останавливало: лишние определения терялись, а plan показывал успех.
+    precondition {
+      condition = !contains(local.duplicate_policy_names, each.key)
+      error_message = format(
+        "Имя политики %s задано больше чем в одном источнике (%s). Останется только последний — остальные определения потеряются молча; переименуйте лишние.",
+        each.key,
+        join(", ", [for src, names in local.policy_sources : src if contains(names, each.key)])
+      )
+    }
   }
 }
 

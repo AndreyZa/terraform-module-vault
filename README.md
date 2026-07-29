@@ -12,7 +12,7 @@ Terraform-модуль для прав доступа в Vault: политики
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.7.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.0"
 
   kv_mount   = "secret" # обязателен, дефолта нет
   kv_version = 2        # 1 или 2, должно совпадать с маунтом
@@ -87,9 +87,10 @@ module "access" {
 | `jwt_backend` | `object` | `{}` | конфиг метода — только при `manage_jwt_backend = true` |
 | `jwt_roles` | `map(object)` | `{}` | роли JWT/OIDC: `policies`, `user_claim`, `bound_audiences`, `bound_claims`, … |
 | `approle_path` | `string` | `"approle"` | путь AppRole-бэкенда |
-| `approle_roles` | `map(object)` | `{}` | роли AppRole: `policies`, TTL, ограничения по CIDR |
+| `manage_approle_backend` | `bool` | `true` | создавать ли сам AppRole-бэкенд |
+| `approle_roles` | `map(object)` | `{}` | роли AppRole: `policies`, TTL, `token_period`, ограничения по CIDR |
 
-Три источника политик (`policies`, `policy_files_dir`, `raw_policies`) складываются; одно имя в двух источниках ловит `check`.
+Политики приходят из четырёх источников — `services`, `policies`, `policy_files_dir`, `raw_policies` — и складываются. Одно имя в двух источниках валит `plan`: `merge()` оставил бы только последний, а остальные определения потерялись бы молча.
 
 ## Выходы
 
@@ -101,7 +102,7 @@ module "access" {
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.7.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.0"
 
   kv_mount   = "secret"
   kv_version = 1
@@ -364,7 +365,16 @@ Accessor метода берётся из `vault auth list -format=json`. Зна
 
 ## Что проверяется до применения
 
-`precondition` — валят `plan`:
+Всё перечисленное валит `plan`. Мягких предупреждений модуль не использует: `check` в Terraform не останавливает `apply`, и до 2.0 коллизии имён так и уезжали в прод.
+
+`validation` — на входах:
+
+- неизвестное право в `path_capabilities` / `raw_path_capabilities` / `mounts[*].path_capabilities` (опечатка не отбрасывается с ошибкой, а молча выпадает при сборке правил — получилась бы строфа `capabilities = []`, которую Vault принимает и которая не даёт ничего);
+- `kv_version` не `1`/`2` — в том числе внутри `mounts[*]`, где иное значение молча трактовалось бы как v1;
+- `role_type` не `jwt`/`oidc`, `bound_claims_type` не `string`/`glob`;
+- `kv_mount` с ведущим или завершающим слэшем.
+
+`precondition` — на ресурсах:
 
 - роль ссылается на политику, которой нет в конфиге (Vault такую роль создаёт молча, логин проходит, прав нет) — описать политику либо внести имя в `external_policies`;
 - JWT-роль ничем не ограничена (нет ни `bound_audiences`, ни `bound_subject`, ни `bound_claims`);
@@ -374,9 +384,12 @@ Accessor метода берётся из `vault auth list -format=json`. Зна
 - `disable_local_ca_jwt = true` без `ca_cert`/`token_reviewer_jwt` — Vault снаружи кластера получит 401 на каждом TokenReview;
 - `bound_service_account_names = ["*"]` вместе с `namespaces = ["*"]`;
 - имя политики не в нижнем регистре (Vault приводит к lowercase → вечный diff);
-- пустое тело политики.
+- пустое тело политики;
+- одно имя политики из двух источников; одно имя роли и в `services`, и в `jwt_roles`;
+- `token_ttl` больше `token_explicit_max_ttl` — для всех трёх типов ролей;
+- `token_period` вместе с ненулевым `token_explicit_max_ttl` — для всех трёх типов ролей.
 
-`check` — предупреждают в plan: одно имя политики из двух источников; один путь и в `read_paths`, и в `write_paths` (вторая `path`-строфа перетирает первую).
+Пересечение `read_paths` / `write_paths` / `list_paths` **не** запрещено: правила складываются по путям, на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities.
 
 Порядок гарантирован: роли зависят от `vault_policy.this`, поэтому в одном apply политика создаётся раньше роли.
 
@@ -398,6 +411,7 @@ terraform import 'module.access.vault_jwt_auth_backend_role.this["test-terraform
 | `vault_policy.this["<имя>"]` | `<имя>` |
 | `vault_jwt_auth_backend_role.this["<имя>"]` | `auth/<jwt_path>/role/<имя>` |
 | `vault_jwt_auth_backend.this[0]` | `<jwt_path>` |
+| `vault_auth_backend.approle[0]` | `<approle_path>` |
 | `vault_approle_auth_backend_role.this["<имя>"]` | `auth/<approle_path>/role/<имя>` |
 | `vault_auth_backend.kubernetes["<кластер>"]` | `<auth_path>` (по умолчанию `kubernetes/<кластер>`) |
 | `vault_kubernetes_auth_backend_config.this["<кластер>"]` | `auth/<auth_path>/config` |
@@ -410,6 +424,24 @@ terraform import 'module.access.vault_jwt_auth_backend_role.this["test-terraform
 
 Что уже есть в Vault: `vault policy list`, `vault list auth/<jwt_path>/role`, `vault read auth/<jwt_path>/role/<имя>`.
 
+## Обновление с 1.x на 2.0
+
+Адреса ресурсов не изменились — `moved`-блоки и импорт не нужны. Но `plan` теперь падает там, где 1.x молча продолжал, поэтому обновляться стоит не в тот же заход, что и правку прав.
+
+**Что чинить перед обновлением:**
+
+| Что | Было в 1.x | Стало в 2.0 |
+|---|---|---|
+| AppRole с непустым `approle_roles` | `plan` падал с `Unsupported attribute` на `token_period` — метод был нерабочим целиком | работает; появились `token_period` и `token_no_default_policy` |
+| Опечатка в capability | правило молча превращалось в `capabilities = []`: политика применялась, прав не давала | валит `plan` |
+| `mounts[*].kv_version` кроме `1`/`2` | молча трактовалось как v1 | валит `plan` |
+| Одно имя политики или роли из двух источников | `Warning` в plan, `apply` шёл, побеждал последний источник | валит `plan` |
+| `token_ttl` > `token_explicit_max_ttl`, `token_period` с потолком | проверялось только у JWT-ролей | проверяется у kubernetes и AppRole тоже |
+
+Прогоните `terraform plan` до мержа: если модуль ругается на коллизию имён или на capability, значит в 1.x эта часть конфига уже не работала так, как выглядела.
+
+**`manage_approle_backend`** появился со значением `true`, а не `false` как у `manage_kv_mount` и `manage_jwt_backend`, — именно чтобы обновление ничего не сломало: в 1.x бэкенд создавался безусловно, и дефолт `false` снёс бы его вместе со всеми ролями. Если AppRole-бэкенд у вас заведён вне Terraform, поставьте `false` явно.
+
 ## Версионирование
 
 Релизы помечаются тегами `vX.Y.Z`; в `source` всегда указывается `?ref=` на тег, а не на ветку — иначе очередной коммит в `main` уедет в прод при ближайшем `terraform init -upgrade`.
@@ -418,13 +450,13 @@ terraform import 'module.access.vault_jwt_auth_backend_role.this["test-terraform
 - **minor** — новые входы с дефолтами, новые проверки;
 - **patch** — правки, не меняющие поведение.
 
-## Пример
+## Примеры
 
 - [examples/service](examples/service) — одна запись `services`: политика + роль;
 - [examples/jwt](examples/jwt) — то же раздельными `policies` и `jwt_roles`;
 - [examples/minimal](examples/minimal) — политика, роль kubernetes и AppRole.
 
-Оба проверяются через `terraform init && terraform validate`; применять не обязательно.
+Все три проверяются через `terraform init && terraform validate`; применять не обязательно.
 
 ## Локальная разработка модуля
 
@@ -436,4 +468,17 @@ module "access" {
 }
 ```
 
-После правок — `terraform fmt -recursive`, `terraform validate` в `examples/minimal` и у потребителя.
+После правок:
+
+```bash
+terraform fmt -recursive
+terraform test          # в корне модуля
+```
+
+`terraform test` (нужен Terraform >= 1.6) живого Vault не требует: все прогоны — `command = plan`, тело политики известно до `apply`. В [tests/](tests) проверяются раскладка путей v1/v2, слияние пересекающихся путей, микс маунтов и все `precondition`/`validation`.
+
+**`terraform validate` одного его не заменяет.** Terraform не типизирует `each.value` статически, поэтому обращение к несуществующему полю объекта `validate` проходит и падает только на `plan` — ровно так в 1.7.0 уехал сломанный AppRole. Тесты этот класс ошибок ловят, `validate` — нет.
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).

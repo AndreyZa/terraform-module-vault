@@ -145,6 +145,29 @@ variable "services" {
     condition     = alltrue([for s in values(var.services) : contains(["string", "glob"], s.bound_claims_type)])
     error_message = "bound_claims_type — \"string\" или \"glob\"."
   }
+
+  # Неизвестное право не отбрасывается с ошибкой, а молча выпадает при сборке
+  # правил — на выходе получается path-строфа с capabilities = [], которую Vault
+  # принимает и которая не даёт ничего. Ловим опечатку здесь.
+  validation {
+    condition = alltrue([
+      for s in values(var.services) : alltrue(concat(
+        [for caps in values(s.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
+        [for caps in values(s.raw_path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
+        [for m in s.mounts : alltrue([for caps in values(m.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])])],
+      ))
+    ])
+    error_message = "services: в path_capabilities / raw_path_capabilities / mounts[*].path_capabilities допустимы только create, read, update, patch, delete, list, sudo, deny."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.services) : alltrue([
+        for m in s.mounts : m.kv_version == null || contains([1, 2], m.kv_version)
+      ])
+    ])
+    error_message = "services: mounts[*].kv_version — 1 или 2 (либо null, чтобы взять общий kv_version). Иное значение молча трактовалось бы как v1."
+  }
 }
 
 ##############################################################################
@@ -193,15 +216,27 @@ variable "policies" {
   }))
   default = {}
 
+  # Неизвестное право не отбрасывается с ошибкой, а молча выпадает при сборке
+  # правил — на выходе получается path-строфа с capabilities = [], которую Vault
+  # принимает и которая не даёт ничего. Ловим опечатку здесь.
+  validation {
+    condition = alltrue([
+      for p in values(var.policies) : alltrue(concat(
+        [for caps in values(p.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
+        [for caps in values(p.raw_path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
+        [for m in p.mounts : alltrue([for caps in values(m.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])])],
+      ))
+    ])
+    error_message = "policies: в path_capabilities / raw_path_capabilities / mounts[*].path_capabilities допустимы только create, read, update, patch, delete, list, sudo, deny."
+  }
+
   validation {
     condition = alltrue([
       for p in values(var.policies) : alltrue([
-        for caps in concat(values(p.path_capabilities), values(p.raw_path_capabilities)) : alltrue([
-          for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)
-        ])
+        for m in p.mounts : m.kv_version == null || contains([1, 2], m.kv_version)
       ])
     ])
-    error_message = "path_capabilities: допустимы только create, read, update, patch, delete, list, sudo, deny."
+    error_message = "policies: mounts[*].kv_version — 1 или 2 (либо null, чтобы взять общий kv_version). Иное значение молча трактовалось бы как v1."
   }
 }
 
@@ -223,7 +258,7 @@ variable "raw_policies" {
   description = <<-EOT
     Политики готовым HCL: имя → тело. Для случаев, когда HCL собирается у вызывающего
     (например, templatefile со своими переменными). Складывается с policy_files_dir;
-    пересечение имён валит проверку.
+    пересечение имён валит plan (precondition на vault_policy).
   EOT
   type        = map(string)
   default     = {}
@@ -459,6 +494,20 @@ variable "approle_path" {
   default     = "approle"
 }
 
+variable "manage_approle_backend" {
+  description = <<-EOT
+    Создавать сам AppRole-бэкенд (только когда approle_roles непуст).
+    В отличие от manage_kv_mount и manage_jwt_backend по умолчанию true: до 2.0
+    бэкенд создавался безусловно, и дефолт false снёс бы его при обновлении
+    вместе со всеми ролями под ним.
+    Если бэкенд уже поднят — поставить false либо сделать
+    `terraform import module.<имя>.vault_auth_backend.approle[0] <approle_path>`,
+    иначе apply упадёт на "path is already in use".
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "approle_roles" {
   description = "Роли AppRole: ключ — имя роли."
   type = map(object({
@@ -468,8 +517,18 @@ variable "approle_roles" {
     token_ttl              = optional(number)
     token_max_ttl          = optional(number)
     token_explicit_max_ttl = optional(number)
-    token_bound_cidrs      = optional(list(string))
-    secret_id_bound_cidrs  = optional(list(string), [])
+
+    # Периодический токен: живёт бесконечно, пока его продлевают не реже
+    # token_period. Требует token_explicit_max_ttl = 0 — жёсткий потолок
+    # прикончил бы его независимо от продлений.
+    token_period = optional(number)
+
+    # Не подмешивать встроенную политику default. Она даёт мелочи вроде
+    # auth/token/lookup-self и renew-self — отключив её, их придётся выписать
+    # руками через raw_path_capabilities.
+    token_no_default_policy = optional(bool, false)
+    token_bound_cidrs       = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
+    secret_id_bound_cidrs   = optional(list(string), [])
   }))
   default = {}
 }

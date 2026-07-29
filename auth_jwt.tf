@@ -103,6 +103,13 @@ resource "vault_jwt_auth_backend_role" "this" {
       error_message = "JWT-роль ${each.key} с role_type = \"oidc\" обязана задать allowed_redirect_uris."
     }
 
+    # Имя из services и jwt_roles одновременно merge() схлопывает молча, оставляя
+    # определение из services. До 2.0 здесь был check — предупреждение, apply шёл.
+    precondition {
+      condition     = !contains(tolist(local.duplicate_jwt_role_names), each.key)
+      error_message = "JWT-роль ${each.key} задана и в services, и в jwt_roles. Останется определение из services, второе потеряется молча; переименуйте одно из них."
+    }
+
     # token_explicit_max_ttl — жёсткий потолок: токен умрёт раньше, чем отработает
     # свой token_ttl, и продление не поможет.
     precondition {

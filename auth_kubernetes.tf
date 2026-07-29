@@ -102,5 +102,25 @@ resource "vault_kubernetes_auth_backend_role" "this" {
       condition     = !(contains(each.value.service_accounts, "*") && contains(each.value.namespaces, "*"))
       error_message = "Роль ${each.key} разрешает вход любому сервисаккаунту в любом namespace. Ограничить хотя бы одно из полей."
     }
+
+    # token_explicit_max_ttl — жёсткий потолок: токен умрёт раньше, чем отработает
+    # свой token_ttl, и продление не поможет.
+    precondition {
+      condition = (
+        coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+        || coalesce(each.value.token_ttl, var.default_token_ttl) <= coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+      )
+      error_message = "Роль ${each.key}: token_ttl больше token_explicit_max_ttl — токен будет отозван раньше, чем истечёт его собственный TTL."
+    }
+
+    # Периодический токен продлевается бесконечно, но жёсткий потолок всё равно
+    # его прикончит — вместе эти два поля не работают.
+    precondition {
+      condition = (
+        each.value.token_period == null
+        || coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+      )
+      error_message = "Роль ${each.key}: token_period задан вместе с token_explicit_max_ttl — потолок отзовёт токен, сколько его ни продлевай. Для периодического токена поставить token_explicit_max_ttl = 0."
+    }
   }
 }

@@ -3,7 +3,7 @@
 ##############################################################################
 
 resource "vault_auth_backend" "approle" {
-  count = length(var.approle_roles) > 0 ? 1 : 0
+  count = var.manage_approle_backend && length(var.approle_roles) > 0 ? 1 : 0
 
   type        = "approle"
   path        = var.approle_path
@@ -13,7 +13,9 @@ resource "vault_auth_backend" "approle" {
 resource "vault_approle_auth_backend_role" "this" {
   for_each = var.approle_roles
 
-  backend   = vault_auth_backend.approle[0].path
+  # Путь берём из переменной, а не из ресурса: при manage_approle_backend = false
+  # ресурса нет, а роли всё равно ложатся под уже поднятый бэкенд.
+  backend   = var.approle_path
   role_name = each.key
 
   token_policies          = each.value.policies
@@ -34,12 +36,33 @@ resource "vault_approle_auth_backend_role" "this" {
   secret_id_bound_cidrs = each.value.secret_id_bound_cidrs
 
   # Политики — раньше ролей (см. комментарий в auth_kubernetes.tf).
-  depends_on = [vault_policy.this]
+  # Бэкенд — раньше ролей: связь через var.approle_path неявной зависимости не даёт.
+  depends_on = [vault_policy.this, vault_auth_backend.approle]
 
   lifecycle {
     precondition {
       condition     = length(setsubtract(each.value.policies, local.known_policy_names)) == 0
       error_message = "AppRole ${each.key} ссылается на политики, которых нет в конфиге: ${join(", ", setsubtract(each.value.policies, local.known_policy_names))}."
+    }
+
+    # token_explicit_max_ttl — жёсткий потолок: токен умрёт раньше, чем отработает
+    # свой token_ttl, и продление не поможет.
+    precondition {
+      condition = (
+        coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+        || coalesce(each.value.token_ttl, var.default_token_ttl) <= coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+      )
+      error_message = "AppRole ${each.key}: token_ttl больше token_explicit_max_ttl — токен будет отозван раньше, чем истечёт его собственный TTL."
+    }
+
+    # Периодический токен продлевается бесконечно, но жёсткий потолок всё равно
+    # его прикончит — вместе эти два поля не работают.
+    precondition {
+      condition = (
+        each.value.token_period == null
+        || coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+      )
+      error_message = "AppRole ${each.key}: token_period задан вместе с token_explicit_max_ttl — потолок отзовёт токен, сколько его ни продлевай. Для периодического токена поставить token_explicit_max_ttl = 0."
     }
   }
 }
