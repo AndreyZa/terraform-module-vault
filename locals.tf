@@ -21,7 +21,7 @@ locals {
       policies                     = concat([name], s.extra_policies)
       role_type                    = s.role_type
       user_claim                   = s.user_claim
-      bound_audiences              = s.bound_audiences
+      bound_audiences              = s.bound_audiences == null ? var.default_bound_audiences : s.bound_audiences
       bound_subject                = s.bound_subject
       bound_claims                 = s.bound_claims
       bound_claims_type            = s.bound_claims_type
@@ -54,7 +54,7 @@ locals {
       policies                     = r.policies
       role_type                    = r.role_type
       user_claim                   = r.user_claim
-      bound_audiences              = r.bound_audiences
+      bound_audiences              = r.bound_audiences == null ? var.default_bound_audiences : r.bound_audiences
       bound_subject                = r.bound_subject
       bound_claims                 = r.bound_claims
       bound_claims_type            = r.bound_claims_type

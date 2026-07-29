@@ -80,7 +80,8 @@ module "access" {
 | `default_token_ttl` | `number` | `600` | TTL токена (10 мин) |
 | `default_token_max_ttl` | `number` | `900` | предел продления (15 мин) |
 | `default_token_explicit_max_ttl` | `number` | `900` | жёсткий предел жизни токена (15 мин) |
-| `default_token_bound_cidrs` | `list(string)` | `["10.0.0.0/8", "127.0.0.0/8"]` | откуда токен принимается |
+| `default_token_bound_cidrs` | `list(string)` | `["127.0.0.0/8", "10.0.0.0/8"]` | откуда токен принимается |
+| `default_bound_audiences` | `list(string)` | `[]` | аудитория токена — обычно адрес самого Vault |
 | `jwt_path` | `string` | `"jwt"` | путь JWT/OIDC-бэкенда; роли лягут в `auth/<jwt_path>/role/<имя>` |
 | `manage_jwt_backend` | `bool` | `false` | управлять ли конфигом самого метода (issuer, ключи) |
 | `jwt_backend` | `object` | `{}` | конфиг метода — только при `manage_jwt_backend = true` |
@@ -139,6 +140,26 @@ jwt_path = "jwt_v2"   # → auth/jwt_v2/role/test-terraform-ro, логин: auth
 
 Один вызов модуля работает с одним путём. Нужны роли сразу в нескольких (`jwt` и `jwt_v2`) — два вызова модуля с разными `jwt_path`.
 
+### Аудитория
+
+`aud` в токене — это адрес того Vault, для которого issuer его выписал. Он один на всю установку, поэтому задаётся один раз, а роли наследуют:
+
+```hcl
+default_bound_audiences = ["https://vault.example.internal"]
+
+services = {
+  "billing" = {
+    read_paths   = ["apps/billing/prod"]
+    bound_claims = { project_id = "42" }
+    # bound_audiences не пишем — берётся общий
+  }
+}
+```
+
+Модуль не может подставить адрес сам: он живёт в конфигурации провайдера, а её модуль не видит.
+
+Роль может задать свой список или отказаться от проверки — `bound_audiences = []`; тогда ограничением обязаны служить `bound_claims` или `bound_subject`, иначе `plan` не пройдёт.
+
 ### Токены: дефолты
 
 | | значение | что делает |
@@ -146,10 +167,12 @@ jwt_path = "jwt_v2"   # → auth/jwt_v2/role/test-terraform-ro, логин: auth
 | `token_ttl` | 10 мин | сколько живёт свежий токен |
 | `token_max_ttl` | 15 мин | докуда его можно продлевать |
 | `token_explicit_max_ttl` | 15 мин | жёсткий потолок: по истечении токен отзывается, продление не спасает |
-| `token_bound_cidrs` | `10.0.0.0/8`, `127.0.0.0/8` | откуда токен вообще принимается |
+| `token_bound_cidrs` | `127.0.0.0/8`, `10.0.0.0/8` | откуда токен вообще принимается |
 | `user_claim` | `project_id` | что становится именем сущности в аудите |
 
 Меняются глобально через `default_token_*` / `default_token_bound_cidrs` либо точечно в роли. Снять ограничение по сети у одной роли — `token_bound_cidrs = []` (пустой список, не `null`: `null` означает «взять общий»).
+
+Порядок в `token_bound_cidrs` ни на что не влияет: провайдер отдаёт список множеством, и Vault хранит его в своём порядке независимо от того, как написано в конфиге. Diff от перестановки не возникает.
 
 `token_ttl` больше `token_explicit_max_ttl` валит `plan`: иначе токен отзывался бы раньше, чем истекал его собственный TTL.
 

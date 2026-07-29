@@ -79,7 +79,7 @@ variable "services" {
     # --- вход (как в jwt_roles) ---
     role_type       = optional(string, "jwt")
     user_claim      = optional(string, "project_id")
-    bound_audiences = optional(list(string), [])
+    bound_audiences = optional(list(string)) # null → default_bound_audiences, [] → без проверки aud
     bound_subject   = optional(string)
 
     bound_claims      = optional(map(string), {})
@@ -251,7 +251,21 @@ variable "default_token_bound_cidrs" {
     в роли token_bound_cidrs = [].
   EOT
   type        = list(string)
-  default     = ["10.0.0.0/8", "127.0.0.0/8"]
+  default     = ["127.0.0.0/8", "10.0.0.0/8"]
+}
+
+variable "default_bound_audiences" {
+  description = <<-EOT
+    Аудитория токена по умолчанию — как правило адрес самого Vault: issuer
+    выписывает JWT именно для него, и роль не должна принимать токен, выписанный
+    кому-то другому. Модуль не может взять его сам: адрес живёт в конфигурации
+    провайдера, а её модуль не видит.
+    Роль наследует список, если не задала bound_audiences; чтобы отказаться
+    точечно — bound_audiences = [] (и тогда роль должна ограничиваться
+    bound_claims или bound_subject).
+  EOT
+  type        = list(string)
+  default     = []
 }
 
 ##############################################################################
@@ -309,7 +323,7 @@ variable "jwt_roles" {
 
     role_type       = optional(string, "jwt")
     user_claim      = optional(string, "project_id")
-    bound_audiences = optional(list(string), [])
+    bound_audiences = optional(list(string)) # null → default_bound_audiences, [] → без проверки aud
     bound_subject   = optional(string)
 
     # claim → допустимое значение (несколько — через запятую).
