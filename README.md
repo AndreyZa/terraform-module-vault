@@ -124,7 +124,31 @@ module "access" {
 
 Роль обязана быть чем-то ограничена — `bound_audiences`, `bound_subject` или `bound_claims`. Иначе токен получит любой предъявитель валидного JWT от этого issuer'а; модуль валит такой `plan`.
 
-Для шаблонов в значениях (ветки, окружения, репозитории) — `bound_claims_type = "glob"`, тогда работает `ref = "release/*"`.
+Для шаблонов в значениях (ветки, окружения, репозитории) — `bound_claims_type = "glob"`, тогда работает `ref = "release/*"`. Режим общий для всей карты, не для отдельного claim'а.
+
+### bound_claims: значения
+
+`bound_claims` — это `map(string)`; несколько допустимых значений перечисляются через запятую и работают как ИЛИ:
+
+```hcl
+bound_claims = {
+  project_id    = "42"        # Vault покажет map[project_id:[42]]
+  ref           = "main"
+  ref_protected = "true"
+}
+
+bound_claims = {
+  project_id = "42,57,91"     # Vault покажет map[project_id:[42 57 91]]
+}
+```
+
+**Тип значения в токене должен совпадать.** Сравнение не приводит число к строке: если issuer положил `"project_id": 42` числом, а в политике написано `"42"`, логин отвалится с `claim "project_id" does not match any associated bound claim values`. GitLab отдаёт `project_id` строкой, но проверять стоит по факту:
+
+```bash
+cut -d. -f2 <<< "$TOKEN" | base64 -d 2>/dev/null | python3 -m json.tool
+```
+
+Вложенный claim адресуется через `/`: `bound_claims = { "metadata/team" = "platform" }`.
 
 Конфиг самого метода (issuer, ключи, discovery) можно забрать под Terraform: `manage_jwt_backend = true` + `jwt_backend = {...}` и `terraform import module.<имя>.vault_jwt_auth_backend.this[0] jwt`. По умолчанию выключено намеренно: роли меняются часто, а конфиг метода заводят один раз, и перетереть его чужим apply — уронить логин всем сразу.
 
