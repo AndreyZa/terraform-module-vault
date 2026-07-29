@@ -62,6 +62,7 @@ resource "vault_kubernetes_auth_backend_role" "this" {
   token_ttl              = coalesce(each.value.token_ttl, var.default_token_ttl)
   token_max_ttl          = coalesce(each.value.token_max_ttl, var.default_token_max_ttl)
   token_explicit_max_ttl = coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+  token_period           = each.value.token_period
 
   # null — берём общий список; [] — роль сознательно снимает ограничение.
   token_bound_cidrs = (

@@ -69,6 +69,7 @@ resource "vault_jwt_auth_backend_role" "this" {
   token_ttl              = coalesce(each.value.token_ttl, var.default_token_ttl)
   token_max_ttl          = coalesce(each.value.token_max_ttl, var.default_token_max_ttl)
   token_explicit_max_ttl = coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+  token_period           = each.value.token_period
 
   # null — берём общий список; [] — роль сознательно снимает ограничение.
   token_bound_cidrs = (
@@ -109,6 +110,16 @@ resource "vault_jwt_auth_backend_role" "this" {
         || coalesce(each.value.token_ttl, var.default_token_ttl) <= coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
       )
       error_message = "JWT-роль ${each.key}: token_ttl больше token_explicit_max_ttl — токен будет отозван раньше, чем истечёт его собственный TTL."
+    }
+
+    # Периодический токен продлевается бесконечно, но жёсткий потолок всё равно
+    # его прикончит — вместе эти два поля не работают.
+    precondition {
+      condition = (
+        each.value.token_period == null
+        || coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+      )
+      error_message = "JWT-роль ${each.key}: token_period задан вместе с token_explicit_max_ttl — потолок отзовёт токен, сколько его ни продлевай. Для периодического токена поставить token_explicit_max_ttl = 0."
     }
   }
 }

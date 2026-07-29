@@ -98,7 +98,12 @@ variable "services" {
     token_ttl              = optional(number) # сек; null → default_token_ttl
     token_max_ttl          = optional(number)
     token_explicit_max_ttl = optional(number)
-    token_bound_cidrs      = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
+
+    # Периодический токен: живёт бесконечно, пока его продлевают не реже
+    # token_period. Требует token_explicit_max_ttl = 0 — жёсткий потолок
+    # прикончил бы его независимо от продлений.
+    token_period      = optional(number)
+    token_bound_cidrs = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
   }))
   default = {}
 
@@ -217,7 +222,12 @@ variable "k8s_roles" {
     token_ttl              = optional(number) # сек; null → default_token_ttl
     token_max_ttl          = optional(number)
     token_explicit_max_ttl = optional(number)
-    token_bound_cidrs      = optional(list(string))
+
+    # Периодический токен: живёт бесконечно, пока его продлевают не реже
+    # token_period. Требует token_explicit_max_ttl = 0 — жёсткий потолок
+    # прикончил бы его независимо от продлений.
+    token_period      = optional(number)
+    token_bound_cidrs = optional(list(string))
   })))
   default = {}
 }
@@ -345,7 +355,12 @@ variable "jwt_roles" {
     token_ttl              = optional(number) # сек; null → default_token_ttl
     token_max_ttl          = optional(number)
     token_explicit_max_ttl = optional(number)
-    token_bound_cidrs      = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
+
+    # Периодический токен: живёт бесконечно, пока его продлевают не реже
+    # token_period. Требует token_explicit_max_ttl = 0 — жёсткий потолок
+    # прикончил бы его независимо от продлений.
+    token_period      = optional(number)
+    token_bound_cidrs = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
   }))
   default = {}
 

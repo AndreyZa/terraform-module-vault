@@ -35,6 +35,7 @@ locals {
       token_ttl                    = s.token_ttl
       token_max_ttl                = s.token_max_ttl
       token_explicit_max_ttl       = s.token_explicit_max_ttl
+      token_period                 = s.token_period
       token_bound_cidrs            = s.token_bound_cidrs
     }
   }
@@ -68,6 +69,7 @@ locals {
       token_ttl                    = r.token_ttl
       token_max_ttl                = r.token_max_ttl
       token_explicit_max_ttl       = r.token_explicit_max_ttl
+      token_period                 = r.token_period
       token_bound_cidrs            = r.token_bound_cidrs
     }
   }, local.service_jwt_roles)
