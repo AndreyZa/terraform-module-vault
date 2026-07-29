@@ -73,6 +73,24 @@ variable "services" {
     allow_destroy = optional(bool, false)
     extra_rules   = optional(string, "")
 
+    # Точный набор прав на путь, когда read/write-наборов недостаточно:
+    # "<путь>" = ["create", "update"]. Права ложатся на путь данных
+    # (<mount>/<путь> в v1, <mount>/data/<путь> в v2) и складываются
+    # с остальными правилами на тот же путь.
+    path_capabilities = optional(map(list(string)), {})
+
+    # Пути с ДРУГИХ маунтов в этой же политике — в том числе другой версии KV.
+    # Верхнеуровневые *_paths относятся к kv_mount / kv_version.
+    mounts = optional(list(object({
+      mount             = string
+      kv_version        = optional(number) # null → var.kv_version
+      read_paths        = optional(list(string), [])
+      write_paths       = optional(list(string), [])
+      list_paths        = optional(list(string), [])
+      allow_destroy     = optional(bool, false)
+      path_capabilities = optional(map(list(string)), {})
+    })), [])
+
     # Дополнительные, уже существующие политики этой же роли.
     extra_policies = optional(list(string), [])
 
@@ -137,8 +155,37 @@ variable "policies" {
     # metadata, в v1 — обычный delete (мягкого удаления там нет).
     # По умолчанию выключено: стирание секрета выписывается осознанно.
     allow_destroy = optional(bool, false)
+
+    # Точный набор прав на путь, когда read/write-наборов недостаточно:
+    # "<путь>" = ["create", "update"]. Права ложатся на путь данных
+    # (<mount>/<путь> в v1, <mount>/data/<путь> в v2) и складываются
+    # с остальными правилами на тот же путь.
+    path_capabilities = optional(map(list(string)), {})
+
+    # Пути с ДРУГИХ маунтов в этой же политике — в том числе другой версии KV.
+    # Верхнеуровневые *_paths относятся к kv_mount / kv_version.
+    mounts = optional(list(object({
+      mount             = string
+      kv_version        = optional(number) # null → var.kv_version
+      read_paths        = optional(list(string), [])
+      write_paths       = optional(list(string), [])
+      list_paths        = optional(list(string), [])
+      allow_destroy     = optional(bool, false)
+      path_capabilities = optional(map(list(string)), {})
+    })), [])
   }))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for p in values(var.policies) : alltrue([
+        for caps in values(p.path_capabilities) : alltrue([
+          for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)
+        ])
+      ])
+    ])
+    error_message = "path_capabilities: допустимы только create, read, update, patch, delete, list, sudo, deny."
+  }
 }
 
 variable "policy_files_dir" {

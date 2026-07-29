@@ -8,11 +8,13 @@ locals {
 
   service_policy_specs = {
     for name, s in var.services : name => {
-      read_paths    = s.read_paths
-      write_paths   = s.write_paths
-      list_paths    = s.list_paths
-      allow_destroy = s.allow_destroy
-      extra_rules   = s.extra_rules
+      read_paths        = s.read_paths
+      write_paths       = s.write_paths
+      list_paths        = s.list_paths
+      allow_destroy     = s.allow_destroy
+      extra_rules       = s.extra_rules
+      path_capabilities = s.path_capabilities
+      mounts            = s.mounts
     }
   }
 
@@ -42,11 +44,13 @@ locals {
 
   policy_specs = merge({
     for name, p in var.policies : name => {
-      read_paths    = p.read_paths
-      write_paths   = p.write_paths
-      list_paths    = p.list_paths
-      allow_destroy = p.allow_destroy
-      extra_rules   = p.extra_rules
+      read_paths        = p.read_paths
+      write_paths       = p.write_paths
+      list_paths        = p.list_paths
+      allow_destroy     = p.allow_destroy
+      extra_rules       = p.extra_rules
+      path_capabilities = p.path_capabilities
+      mounts            = p.mounts
     }
   }, local.service_policy_specs)
 
@@ -77,102 +81,138 @@ locals {
   ############################################################################
   # Правила политики
   #
-  # Считаются здесь, а не в шаблоне: KV v1 и v2 живут в разных пространствах
-  # путей (v1 — <mount>/<path>, v2 — <mount>/data/ + <mount>/metadata/),
-  # и разводить это ветками внутри HCL-шаблона нечитаемо.
+  # Политика раскладывается на блоки «маунт + версия KV»: верхнеуровневые пути
+  # относятся к kv_mount, каждый элемент mounts — к своему. Так одна политика
+  # может смешивать пути из kv1 и kv2, и код при этом остаётся общим.
   ############################################################################
 
-  policy_rules_raw = {
+  policy_blocks = {
     for name, p in local.policy_specs : name => concat(
-      # --- чтение ---
-      flatten([
-        for path in p.read_paths : local.kv_v2 ? [
-          {
-            path         = "${var.kv_mount}/data/${path}"
-            capabilities = ["read"]
-            note         = ""
-          },
-          {
-            path         = "${var.kv_mount}/metadata/${path}"
-            capabilities = ["read", "list"]
-            note         = "версии и обход дерева"
-          },
-          ] : [
-          {
-            path         = "${var.kv_mount}/${path}"
-            capabilities = ["read"]
-            note         = ""
-          },
-        ]
-      ]),
-
-      # --- запись ---
-      flatten([
-        for path in p.write_paths : local.kv_v2 ? concat([
-          {
-            path         = "${var.kv_mount}/data/${path}"
-            capabilities = ["create", "read", "update", "patch"]
-            note         = ""
-          },
-          {
-            path = "${var.kv_mount}/metadata/${path}"
-            capabilities = concat(
-              ["create", "read", "update", "list"],
-              p.allow_destroy ? ["delete"] : [],
-            )
-            note = p.allow_destroy ? "delete по metadata сносит все версии секрета" : ""
-          },
-          {
-            path         = "${var.kv_mount}/delete/${path}"
-            capabilities = ["update"]
-            note         = "мягкое удаление версии"
-          },
-          {
-            path         = "${var.kv_mount}/undelete/${path}"
-            capabilities = ["update"]
-            note         = "откат мягкого удаления"
-          },
-          ], p.allow_destroy ? [
-          {
-            path         = "${var.kv_mount}/destroy/${path}"
-            capabilities = ["update"]
-            note         = "безвозвратное стирание версии"
-          },
-          ] : []) : [
-          {
-            path = "${var.kv_mount}/${path}"
-            capabilities = concat(
-              ["create", "read", "update", "list"],
-              # В KV v1 удаление сразу безвозвратное: мягкого удаления там нет.
-              p.allow_destroy ? ["delete"] : [],
-            )
-            note = ""
-          },
-        ]
-      ]),
-
-      # --- только обход дерева ---
-      flatten([
-        for path in p.list_paths : local.kv_v2 ? [
-          {
-            path         = "${var.kv_mount}/metadata/${path}"
-            capabilities = ["list"]
-            note         = ""
-          },
-          ] : [
-          {
-            path         = "${var.kv_mount}/${path}"
-            capabilities = ["list"]
-            note         = ""
-          },
-        ]
-      ]),
+      [{
+        mount             = var.kv_mount
+        v2                = local.kv_v2
+        read_paths        = p.read_paths
+        write_paths       = p.write_paths
+        list_paths        = p.list_paths
+        allow_destroy     = p.allow_destroy
+        path_capabilities = p.path_capabilities
+      }],
+      [
+        for m in p.mounts : {
+          mount             = m.mount
+          v2                = coalesce(m.kv_version, var.kv_version) == 2
+          read_paths        = m.read_paths
+          write_paths       = m.write_paths
+          list_paths        = m.list_paths
+          allow_destroy     = m.allow_destroy
+          path_capabilities = m.path_capabilities
+        }
+      ],
     )
+  }
+
+  policy_rules_raw = {
+    for name, blocks in local.policy_blocks : name => flatten([
+      for b in blocks : concat(
+        # --- чтение ---
+        flatten([
+          for path in b.read_paths : b.v2 ? [
+            {
+              path         = "${b.mount}/data/${path}"
+              capabilities = ["read"]
+              note         = ""
+            },
+            {
+              path         = "${b.mount}/metadata/${path}"
+              capabilities = ["read", "list"]
+              note         = "версии и обход дерева"
+            },
+            ] : [
+            {
+              path         = "${b.mount}/${path}"
+              capabilities = ["read"]
+              note         = ""
+            },
+          ]
+        ]),
+
+        # --- запись ---
+        flatten([
+          for path in b.write_paths : b.v2 ? concat([
+            {
+              path         = "${b.mount}/data/${path}"
+              capabilities = ["create", "read", "update", "patch"]
+              note         = ""
+            },
+            {
+              path = "${b.mount}/metadata/${path}"
+              capabilities = concat(
+                ["create", "read", "update", "list"],
+                b.allow_destroy ? ["delete"] : [],
+              )
+              note = b.allow_destroy ? "delete по metadata сносит все версии секрета" : ""
+            },
+            {
+              path         = "${b.mount}/delete/${path}"
+              capabilities = ["update"]
+              note         = "мягкое удаление версии"
+            },
+            {
+              path         = "${b.mount}/undelete/${path}"
+              capabilities = ["update"]
+              note         = "откат мягкого удаления"
+            },
+            ], b.allow_destroy ? [
+            {
+              path         = "${b.mount}/destroy/${path}"
+              capabilities = ["update"]
+              note         = "безвозвратное стирание версии"
+            },
+            ] : []) : [
+            {
+              path = "${b.mount}/${path}"
+              capabilities = concat(
+                ["create", "read", "update", "list"],
+                # В KV v1 удаление сразу безвозвратное: мягкого удаления там нет.
+                b.allow_destroy ? ["delete"] : [],
+              )
+              note = ""
+            },
+          ]
+        ]),
+
+        # --- только обход дерева ---
+        flatten([
+          for path in b.list_paths : b.v2 ? [
+            {
+              path         = "${b.mount}/metadata/${path}"
+              capabilities = ["list"]
+              note         = ""
+            },
+            ] : [
+            {
+              path         = "${b.mount}/${path}"
+              capabilities = ["list"]
+              note         = ""
+            },
+          ]
+        ]),
+
+        # --- точный набор прав ---
+        [
+          for path, caps in b.path_capabilities : {
+            path         = b.v2 ? "${b.mount}/data/${path}" : "${b.mount}/${path}"
+            capabilities = caps
+            note         = ""
+          }
+        ],
+      )
+    ])
   }
 
   # Порядок capabilities в выводе — канонический, чтобы политика не «дрожала»
   # в diff от перестановки прав.
-  capability_order = ["create", "read", "update", "patch", "delete", "list", "sudo"]
+  capability_order = ["create", "read", "update", "patch", "delete", "list", "sudo", "deny"]
 
   # Один путь = одна path-строфа. Vault из двух строф на один путь оставляет
   # последнюю, поэтому пересечение read_paths / write_paths / list_paths молча
@@ -190,10 +230,18 @@ locals {
     ]
   }
 
+  # Шапка политики: какие маунты и каких версий в неё попали. Для смешанной
+  # политики одной версии в заголовке уже не хватает.
+  policy_mounts_note = {
+    for name, blocks in local.policy_blocks : name => join(", ", [
+      for b in blocks : "${b.mount} (kv${b.v2 ? 2 : 1})"
+    ])
+  }
+
   generated_policies = {
     for name, p in local.policy_specs : name => templatefile("${path.module}/templates/kv_policy.hcl.tftpl", {
       name        = name
-      kv_version  = var.kv_version
+      mounts_note = local.policy_mounts_note[name]
       rules       = local.policy_rules[name]
       extra_rules = p.extra_rules
     })

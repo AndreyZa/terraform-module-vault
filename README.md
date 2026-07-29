@@ -70,7 +70,7 @@ module "access" {
 | `manage_kv_mount` | `bool` | `false` | создавать ли сам маунт (обычно он уже есть) |
 | `kv_description` | `string` | `null` | описание маунта, если модуль его создаёт |
 | `services` | `map(object)` | `{}` | одна запись = политика + JWT-роль под тем же именем |
-| `policies` | `map(object)` | `{}` | политики из путей: `read_paths` / `write_paths` / `list_paths` / `allow_destroy` / `extra_rules` |
+| `policies` | `map(object)` | `{}` | политики из путей: `read_paths` / `write_paths` / `list_paths` / `allow_destroy` / `path_capabilities` / `mounts` / `extra_rules` |
 | `policy_files_dir` | `string` | `"policies"` | каталог с рукописными `*.hcl`, **путь от корневого конфига** |
 | `raw_policies` | `map(string)` | `{}` | политики готовым HCL, если он собирается у вызывающего |
 | `external_policies` | `list(string)` | `[]` | чужие политики, на которые ролям разрешено ссылаться |
@@ -254,6 +254,54 @@ cut -d. -f2 <<< "$TOKEN" | base64 -d 2>/dev/null | python3 -m json.tool
 **`kv_version` обязан совпадать с реальной версией маунта.** Политика, выписанная не под ту версию, синтаксически верна, применяется без единой ошибки и не даёт никаких прав — это самая частая причина «политика есть, а 403». Проверить: `vault read sys/mounts/<kv_mount>` → `options.version` (у v1 поле обычно пустое).
 
 Мягкого удаления в v1 нет, поэтому `write_paths` там не выдаёт `delete` — только с явным `allow_destroy = true`. В v2 `write_paths` даёт `delete/` и `undelete/` (пометить версию удалённой и откатить), а безвозвратные `destroy/` и снос `metadata` — тоже лишь по `allow_destroy`.
+
+### Микс маунтов в одной политике
+
+Верхнеуровневые `*_paths` относятся к `kv_mount`. Пути с других маунтов — включая другую версию KV — добавляются через `mounts`:
+
+```hcl
+policies = {
+  "ro-stg-gitlab-terraform" = {
+    read_paths = ["k8s/test"]          # platform-infra, kv2
+
+    mounts = [
+      {
+        mount      = "legacy"
+        kv_version = 1
+        read_paths = ["old/app"]       # legacy, kv1
+      }
+    ]
+  }
+}
+```
+
+Раскрывается в одну политику, где каждый маунт разложен по своим правилам:
+
+```hcl
+path "platform-infra/data/k8s/test"     { capabilities = ["read"] }
+path "platform-infra/metadata/k8s/test" { capabilities = ["read", "list"] }
+path "legacy/old/app"                   { capabilities = ["read"] }
+```
+
+`kv_version` внутри `mounts` необязателен — без него берётся общий.
+
+### Точный набор прав
+
+`read_paths` / `write_paths` — готовые наборы. Когда нужен именно свой (например, писать, но не читать), есть `path_capabilities`: путь → capabilities как есть.
+
+```hcl
+policies = {
+  "drop-box" = {
+    path_capabilities = {
+      "k8s/writeonly" = ["create", "update"]
+    }
+  }
+}
+```
+
+Права ложатся на путь данных (`<mount>/<путь>` в v1, `<mount>/data/<путь>` в v2) и складываются с остальными правилами на тот же путь. Внутри `mounts` поле тоже доступно. Допустимые значения — `create`, `read`, `update`, `patch`, `delete`, `list`, `sudo`, `deny`; опечатка валит `plan`.
+
+Метаданные (`metadata/`, `delete/`, `destroy/`) этим полем не затрагиваются — если нужны и они, добавьте путь в `write_paths` или опишите строфу в `extra_rules`.
 
 Пути из `read_paths`, `write_paths` и `list_paths` можно пересекать: правила складываются по путям, и на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities. (Из двух строф на один путь Vault оставляет последнюю — то есть без такой сборки пересечение молча урезало бы права.)
 
