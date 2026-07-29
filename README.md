@@ -70,7 +70,7 @@ module "access" {
 | `manage_kv_mount` | `bool` | `false` | создавать ли сам маунт (обычно он уже есть) |
 | `kv_description` | `string` | `null` | описание маунта, если модуль его создаёт |
 | `services` | `map(object)` | `{}` | одна запись = политика + JWT-роль под тем же именем |
-| `policies` | `map(object)` | `{}` | политики из путей: `read_paths` / `write_paths` / `list_paths` / `allow_destroy` / `path_capabilities` / `mounts` / `extra_rules` |
+| `policies` | `map(object)` | `{}` | политики из путей: `read_paths` / `write_paths` / `list_paths` / `allow_destroy` / `path_capabilities` / `raw_path_capabilities` / `mounts` / `extra_rules` |
 | `policy_files_dir` | `string` | `"policies"` | каталог с рукописными `*.hcl`, **путь от корневого конфига** |
 | `raw_policies` | `map(string)` | `{}` | политики готовым HCL, если он собирается у вызывающего |
 | `external_policies` | `list(string)` | `[]` | чужие политики, на которые ролям разрешено ссылаться |
@@ -302,6 +302,28 @@ policies = {
 Права ложатся на путь данных (`<mount>/<путь>` в v1, `<mount>/data/<путь>` в v2) и складываются с остальными правилами на тот же путь. Внутри `mounts` поле тоже доступно. Допустимые значения — `create`, `read`, `update`, `patch`, `delete`, `list`, `sudo`, `deny`; опечатка валит `plan`.
 
 Метаданные (`metadata/`, `delete/`, `destroy/`) этим полем не затрагиваются — если нужны и они, добавьте путь в `write_paths` или опишите строфу в `extra_rules`.
+
+### Пути вне KV
+
+`auth/`, `sys/`, `transit/` и прочее живут не в KV-маунте, поэтому для них отдельное поле — `raw_path_capabilities`: путь берётся как есть, без префикса и без оглядки на версию.
+
+```hcl
+policies = {
+  "ro-stg-gitlab-terraform" = {
+    read_paths = ["k8s/test"]
+
+    raw_path_capabilities = {
+      "auth/token/create" = ["create", "update"]
+    }
+  }
+}
+```
+
+Правила складываются с остальными по тому же слиянию путей.
+
+Заметьте: встроенная политика `default` **уже даёт** `auth/token/lookup-self`, `renew-self`, `revoke-self` и `sys/capabilities-self`, а её получает каждый токен. Выписывать их отдельно нужно только при `token_no_default_policy = true` на роли.
+
+`auth/token/create` — право выпускать дочерние токены; именно оно нужно провайдеру `vault`, когда у него не выставлен `skip_child_token`.
 
 Пути из `read_paths`, `write_paths` и `list_paths` можно пересекать: правила складываются по путям, и на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities. (Из двух строф на один путь Vault оставляет последнюю — то есть без такой сборки пересечение молча урезало бы права.)
 

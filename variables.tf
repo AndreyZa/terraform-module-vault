@@ -79,6 +79,12 @@ variable "services" {
     # с остальными правилами на тот же путь.
     path_capabilities = optional(map(list(string)), {})
 
+
+    # Пути ВНЕ KV-маунтов, как есть: "auth/token/create" = ["update"],
+    # "sys/mounts" = ["read"]. Префикс маунта не добавляется, версия KV
+    # не учитывается. Складывается с остальными правилами на тот же путь.
+    raw_path_capabilities = optional(map(list(string)), {})
+
     # Пути с ДРУГИХ маунтов в этой же политике — в том числе другой версии KV.
     # Верхнеуровневые *_paths относятся к kv_mount / kv_version.
     mounts = optional(list(object({
@@ -120,8 +126,13 @@ variable "services" {
     # Периодический токен: живёт бесконечно, пока его продлевают не реже
     # token_period. Требует token_explicit_max_ttl = 0 — жёсткий потолок
     # прикончил бы его независимо от продлений.
-    token_period      = optional(number)
-    token_bound_cidrs = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
+    token_period = optional(number)
+
+    # Не подмешивать встроенную политику default. Она даёт мелочи вроде
+    # auth/token/lookup-self и renew-self — отключив её, их придётся выписать
+    # руками через raw_path_capabilities.
+    token_no_default_policy = optional(bool, false)
+    token_bound_cidrs       = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
   }))
   default = {}
 
@@ -162,6 +173,12 @@ variable "policies" {
     # с остальными правилами на тот же путь.
     path_capabilities = optional(map(list(string)), {})
 
+
+    # Пути ВНЕ KV-маунтов, как есть: "auth/token/create" = ["update"],
+    # "sys/mounts" = ["read"]. Префикс маунта не добавляется, версия KV
+    # не учитывается. Складывается с остальными правилами на тот же путь.
+    raw_path_capabilities = optional(map(list(string)), {})
+
     # Пути с ДРУГИХ маунтов в этой же политике — в том числе другой версии KV.
     # Верхнеуровневые *_paths относятся к kv_mount / kv_version.
     mounts = optional(list(object({
@@ -179,7 +196,7 @@ variable "policies" {
   validation {
     condition = alltrue([
       for p in values(var.policies) : alltrue([
-        for caps in values(p.path_capabilities) : alltrue([
+        for caps in concat(values(p.path_capabilities), values(p.raw_path_capabilities)) : alltrue([
           for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)
         ])
       ])
@@ -273,8 +290,13 @@ variable "k8s_roles" {
     # Периодический токен: живёт бесконечно, пока его продлевают не реже
     # token_period. Требует token_explicit_max_ttl = 0 — жёсткий потолок
     # прикончил бы его независимо от продлений.
-    token_period      = optional(number)
-    token_bound_cidrs = optional(list(string))
+    token_period = optional(number)
+
+    # Не подмешивать встроенную политику default. Она даёт мелочи вроде
+    # auth/token/lookup-self и renew-self — отключив её, их придётся выписать
+    # руками через raw_path_capabilities.
+    token_no_default_policy = optional(bool, false)
+    token_bound_cidrs       = optional(list(string))
   })))
   default = {}
 }
@@ -406,8 +428,13 @@ variable "jwt_roles" {
     # Периодический токен: живёт бесконечно, пока его продлевают не реже
     # token_period. Требует token_explicit_max_ttl = 0 — жёсткий потолок
     # прикончил бы его независимо от продлений.
-    token_period      = optional(number)
-    token_bound_cidrs = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
+    token_period = optional(number)
+
+    # Не подмешивать встроенную политику default. Она даёт мелочи вроде
+    # auth/token/lookup-self и renew-self — отключив её, их придётся выписать
+    # руками через raw_path_capabilities.
+    token_no_default_policy = optional(bool, false)
+    token_bound_cidrs       = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
   }))
   default = {}
 

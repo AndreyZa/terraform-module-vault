@@ -8,13 +8,14 @@ locals {
 
   service_policy_specs = {
     for name, s in var.services : name => {
-      read_paths        = s.read_paths
-      write_paths       = s.write_paths
-      list_paths        = s.list_paths
-      allow_destroy     = s.allow_destroy
-      extra_rules       = s.extra_rules
-      path_capabilities = s.path_capabilities
-      mounts            = s.mounts
+      read_paths            = s.read_paths
+      write_paths           = s.write_paths
+      list_paths            = s.list_paths
+      allow_destroy         = s.allow_destroy
+      extra_rules           = s.extra_rules
+      path_capabilities     = s.path_capabilities
+      raw_path_capabilities = s.raw_path_capabilities
+      mounts                = s.mounts
     }
   }
 
@@ -38,19 +39,21 @@ locals {
       token_max_ttl                = s.token_max_ttl
       token_explicit_max_ttl       = s.token_explicit_max_ttl
       token_period                 = s.token_period
+      token_no_default_policy      = s.token_no_default_policy
       token_bound_cidrs            = s.token_bound_cidrs
     }
   }
 
   policy_specs = merge({
     for name, p in var.policies : name => {
-      read_paths        = p.read_paths
-      write_paths       = p.write_paths
-      list_paths        = p.list_paths
-      allow_destroy     = p.allow_destroy
-      extra_rules       = p.extra_rules
-      path_capabilities = p.path_capabilities
-      mounts            = p.mounts
+      read_paths            = p.read_paths
+      write_paths           = p.write_paths
+      list_paths            = p.list_paths
+      allow_destroy         = p.allow_destroy
+      extra_rules           = p.extra_rules
+      path_capabilities     = p.path_capabilities
+      raw_path_capabilities = p.raw_path_capabilities
+      mounts                = p.mounts
     }
   }, local.service_policy_specs)
 
@@ -74,6 +77,7 @@ locals {
       token_max_ttl                = r.token_max_ttl
       token_explicit_max_ttl       = r.token_explicit_max_ttl
       token_period                 = r.token_period
+      token_no_default_policy      = r.token_no_default_policy
       token_bound_cidrs            = r.token_bound_cidrs
     }
   }, local.service_jwt_roles)
@@ -112,102 +116,111 @@ locals {
   }
 
   policy_rules_raw = {
-    for name, blocks in local.policy_blocks : name => flatten([
-      for b in blocks : concat(
-        # --- чтение ---
-        flatten([
-          for path in b.read_paths : b.v2 ? [
-            {
-              path         = "${b.mount}/data/${path}"
-              capabilities = ["read"]
-              note         = ""
-            },
-            {
-              path         = "${b.mount}/metadata/${path}"
-              capabilities = ["read", "list"]
-              note         = "версии и обход дерева"
-            },
-            ] : [
-            {
-              path         = "${b.mount}/${path}"
-              capabilities = ["read"]
-              note         = ""
-            },
-          ]
-        ]),
+    for name, blocks in local.policy_blocks : name => concat(
+      [
+        for path, caps in local.policy_specs[name].raw_path_capabilities : {
+          path         = path
+          capabilities = caps
+          note         = ""
+        }
+      ],
+      flatten([
+        for b in blocks : concat(
+          # --- чтение ---
+          flatten([
+            for path in b.read_paths : b.v2 ? [
+              {
+                path         = "${b.mount}/data/${path}"
+                capabilities = ["read"]
+                note         = ""
+              },
+              {
+                path         = "${b.mount}/metadata/${path}"
+                capabilities = ["read", "list"]
+                note         = "версии и обход дерева"
+              },
+              ] : [
+              {
+                path         = "${b.mount}/${path}"
+                capabilities = ["read"]
+                note         = ""
+              },
+            ]
+          ]),
 
-        # --- запись ---
-        flatten([
-          for path in b.write_paths : b.v2 ? concat([
-            {
-              path         = "${b.mount}/data/${path}"
-              capabilities = ["create", "read", "update", "patch"]
-              note         = ""
-            },
-            {
-              path = "${b.mount}/metadata/${path}"
-              capabilities = concat(
-                ["create", "read", "update", "list"],
-                b.allow_destroy ? ["delete"] : [],
-              )
-              note = b.allow_destroy ? "delete по metadata сносит все версии секрета" : ""
-            },
-            {
-              path         = "${b.mount}/delete/${path}"
-              capabilities = ["update"]
-              note         = "мягкое удаление версии"
-            },
-            {
-              path         = "${b.mount}/undelete/${path}"
-              capabilities = ["update"]
-              note         = "откат мягкого удаления"
-            },
-            ], b.allow_destroy ? [
-            {
-              path         = "${b.mount}/destroy/${path}"
-              capabilities = ["update"]
-              note         = "безвозвратное стирание версии"
-            },
-            ] : []) : [
-            {
-              path = "${b.mount}/${path}"
-              capabilities = concat(
-                ["create", "read", "update", "list"],
-                # В KV v1 удаление сразу безвозвратное: мягкого удаления там нет.
-                b.allow_destroy ? ["delete"] : [],
-              )
-              note = ""
-            },
-          ]
-        ]),
+          # --- запись ---
+          flatten([
+            for path in b.write_paths : b.v2 ? concat([
+              {
+                path         = "${b.mount}/data/${path}"
+                capabilities = ["create", "read", "update", "patch"]
+                note         = ""
+              },
+              {
+                path = "${b.mount}/metadata/${path}"
+                capabilities = concat(
+                  ["create", "read", "update", "list"],
+                  b.allow_destroy ? ["delete"] : [],
+                )
+                note = b.allow_destroy ? "delete по metadata сносит все версии секрета" : ""
+              },
+              {
+                path         = "${b.mount}/delete/${path}"
+                capabilities = ["update"]
+                note         = "мягкое удаление версии"
+              },
+              {
+                path         = "${b.mount}/undelete/${path}"
+                capabilities = ["update"]
+                note         = "откат мягкого удаления"
+              },
+              ], b.allow_destroy ? [
+              {
+                path         = "${b.mount}/destroy/${path}"
+                capabilities = ["update"]
+                note         = "безвозвратное стирание версии"
+              },
+              ] : []) : [
+              {
+                path = "${b.mount}/${path}"
+                capabilities = concat(
+                  ["create", "read", "update", "list"],
+                  # В KV v1 удаление сразу безвозвратное: мягкого удаления там нет.
+                  b.allow_destroy ? ["delete"] : [],
+                )
+                note = ""
+              },
+            ]
+          ]),
 
-        # --- только обход дерева ---
-        flatten([
-          for path in b.list_paths : b.v2 ? [
-            {
-              path         = "${b.mount}/metadata/${path}"
-              capabilities = ["list"]
-              note         = ""
-            },
-            ] : [
-            {
-              path         = "${b.mount}/${path}"
-              capabilities = ["list"]
-              note         = ""
-            },
-          ]
-        ]),
+          # --- только обход дерева ---
+          flatten([
+            for path in b.list_paths : b.v2 ? [
+              {
+                path         = "${b.mount}/metadata/${path}"
+                capabilities = ["list"]
+                note         = ""
+              },
+              ] : [
+              {
+                path         = "${b.mount}/${path}"
+                capabilities = ["list"]
+                note         = ""
+              },
+            ]
+          ]),
 
-        # --- точный набор прав ---
-        [
-          for path, caps in b.path_capabilities : {
-            path         = b.v2 ? "${b.mount}/data/${path}" : "${b.mount}/${path}"
-            capabilities = caps
-            note         = ""
-          }
-        ],
-      )
-    ])
+          # --- точный набор прав ---
+          [
+            for path, caps in b.path_capabilities : {
+              path         = b.v2 ? "${b.mount}/data/${path}" : "${b.mount}/${path}"
+              capabilities = caps
+              note         = ""
+            }
+          ],
+        )
+      ]),
+    )
   }
 
   # Порядок capabilities в выводе — канонический, чтобы политика не «дрожала»
