@@ -76,15 +76,17 @@ run "kv2_read_write_list" {
     error_message = "v2 read: ожидался secret/metadata/ro с [read, list]"
   }
 
+  # delete на data/ — мягкое удаление последней версии: без него
+  # `vault kv delete <path>` без -versions отвечает 403.
   assert {
-    condition     = strcontains(vault_policy.this["p"].policy, "path \"secret/data/rw\" {\n  capabilities = [\"create\", \"read\", \"update\", \"patch\"]\n}")
-    error_message = "v2 write: ожидался secret/data/rw с [create, read, update, patch]"
+    condition     = strcontains(vault_policy.this["p"].policy, "path \"secret/data/rw\" {\n  capabilities = [\"create\", \"read\", \"update\", \"patch\", \"delete\"]\n}")
+    error_message = "v2 write: ожидался secret/data/rw с [create, read, update, patch, delete]"
   }
 
   # Мягкое удаление входит в write, безвозвратное — нет.
   assert {
     condition     = strcontains(vault_policy.this["p"].policy, "path \"secret/delete/rw\" {\n  capabilities = [\"update\"]\n}")
-    error_message = "v2 write: ожидался secret/delete/rw (мягкое удаление версии)"
+    error_message = "v2 write: ожидался secret/delete/rw (мягкое удаление конкретной версии)"
   }
 
   assert {

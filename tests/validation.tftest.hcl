@@ -109,6 +109,85 @@ run "bad_kv_version_in_services_mounts" {
 }
 
 ##############################################################################
+# Имя маунта. Пустая строка слэшей не содержит, поэтому проверку на них
+# проходила, а пути вырождались в "/data/…" — Vault принимает и не матчит.
+##############################################################################
+
+run "empty_kv_mount" {
+  command = plan
+
+  variables {
+    kv_mount = ""
+    policies = { "p" = { read_paths = ["a"] } }
+  }
+
+  expect_failures = [var.kv_mount]
+}
+
+run "empty_mount_in_policies_mounts" {
+  command = plan
+
+  variables {
+    policies = { "p" = { mounts = [{ mount = "", read_paths = ["a"] }] } }
+  }
+
+  expect_failures = [var.policies]
+}
+
+run "slashed_mount_in_services_mounts" {
+  command = plan
+
+  variables {
+    services = {
+      "s" = {
+        bound_subject = "sub"
+        mounts        = [{ mount = "/legacy/", read_paths = ["a"] }]
+      }
+    }
+  }
+
+  expect_failures = [var.services]
+}
+
+##############################################################################
+# Политика без единой path-строфы. Vault такую принимает молча, а прав она
+# не даёт. Шапка-комментарий у сгенерированной политики есть всегда, поэтому
+# проверкой на непустое тело этот случай не ловился.
+##############################################################################
+
+run "generated_policy_without_rules" {
+  command = plan
+
+  variables {
+    policies = { "p" = {} }
+  }
+
+  expect_failures = [vault_policy.this["p"]]
+}
+
+run "raw_policy_with_only_comments" {
+  command = plan
+
+  variables {
+    raw_policies = { "p" = "# всё выписали, честно\n# правда\n" }
+  }
+
+  expect_failures = [vault_policy.this["p"]]
+}
+
+# Обратная сторона: комментарий со словом path не должен сходить за правило,
+# а нормальная политика — проходить.
+run "commented_out_path_is_not_a_rule" {
+  command = plan
+
+  variables {
+    raw_policies = { "p" = "# path \"secret/a\" { capabilities = [\"read\"] }\n" }
+  }
+
+  expect_failures = [vault_policy.this["p"]]
+}
+
+##############################################################################
 # Коллизии имён. До 2.0 это был check — предупреждение, которое apply не
 # останавливало: побеждал последний источник, остальные определения терялись.
 ##############################################################################
@@ -222,6 +301,68 @@ run "k8s_role_period_with_explicit_max" {
   }
 
   expect_failures = [vault_kubernetes_auth_backend_role.this["c/r"]]
+}
+
+# token_max_ttl прижимает периодический токен ничуть не слабее жёсткого
+# потолка. Проверено на живом Vault: при period = 86400 и max_ttl = 900
+# выдаётся ttl = 899, и renew его не поднимает.
+run "k8s_role_period_with_max_ttl" {
+  command = plan
+
+  variables {
+    clusters = {
+      "c" = { host = "https://api.c:6443", disable_local_ca_jwt = false }
+    }
+    k8s_roles = {
+      "c" = {
+        "r" = {
+          namespaces             = ["ns"]
+          service_accounts       = ["sa"]
+          policies               = ["default"]
+          token_period           = 86400
+          token_explicit_max_ttl = 0
+          token_max_ttl          = 900
+        }
+      }
+    }
+  }
+
+  expect_failures = [vault_kubernetes_auth_backend_role.this["c/r"]]
+}
+
+run "jwt_role_period_with_max_ttl" {
+  command = plan
+
+  variables {
+    jwt_roles = {
+      "r" = {
+        policies               = ["default"]
+        bound_subject          = "sub"
+        token_period           = 86400
+        token_explicit_max_ttl = 0
+        token_max_ttl          = 900
+      }
+    }
+  }
+
+  expect_failures = [vault_jwt_auth_backend_role.this["r"]]
+}
+
+run "approle_period_with_max_ttl" {
+  command = plan
+
+  variables {
+    approle_roles = {
+      "ci" = {
+        policies               = ["default"]
+        token_period           = 86400
+        token_explicit_max_ttl = 0
+        token_max_ttl          = 900
+      }
+    }
+  }
+
+  expect_failures = [vault_approle_auth_backend_role.this["ci"]]
 }
 
 run "approle_ttl_above_explicit_max" {

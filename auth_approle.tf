@@ -55,14 +55,17 @@ resource "vault_approle_auth_backend_role" "this" {
       error_message = "AppRole ${each.key}: token_ttl больше token_explicit_max_ttl — токен будет отозван раньше, чем истечёт его собственный TTL."
     }
 
-    # Периодический токен продлевается бесконечно, но жёсткий потолок всё равно
-    # его прикончит — вместе эти два поля не работают.
+    # Периодический токен продлевается бесконечно, но любой из двух потолков
+    # всё равно его прижмёт (см. комментарий в auth_jwt.tf).
     precondition {
       condition = (
         each.value.token_period == null
-        || coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+        || (
+          coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+          && coalesce(each.value.token_max_ttl, var.default_token_max_ttl) == 0
+        )
       )
-      error_message = "AppRole ${each.key}: token_period задан вместе с token_explicit_max_ttl — потолок отзовёт токен, сколько его ни продлевай. Для периодического токена поставить token_explicit_max_ttl = 0."
+      error_message = "AppRole ${each.key}: token_period задан вместе с ненулевым token_max_ttl или token_explicit_max_ttl — потолок прижмёт токен, сколько его ни продлевай. Для периодического токена оба поля должны быть 0."
     }
   }
 }

@@ -14,6 +14,13 @@ variable "kv_mount" {
     condition     = !startswith(var.kv_mount, "/") && !endswith(var.kv_mount, "/")
     error_message = "kv_mount пишется без ведущего и завершающего слэша."
   }
+
+  # Пустая строка слэшей не содержит и проверку выше проходила, а пути потом
+  # получались вида "/data/secret" — Vault такую политику принимает и не матчит.
+  validation {
+    condition     = trimspace(var.kv_mount) != ""
+    error_message = "kv_mount не может быть пустым: пути выродились бы в \"/data/…\", и политика молча перестала бы что-либо разрешать."
+  }
 }
 
 variable "kv_version" {
@@ -168,6 +175,17 @@ variable "services" {
     ])
     error_message = "services: mounts[*].kv_version — 1 или 2 (либо null, чтобы взять общий kv_version). Иное значение молча трактовалось бы как v1."
   }
+
+  # То же требование, что и к kv_mount: пустое имя или слэши по краям дают
+  # путь, который Vault принимает и не матчит.
+  validation {
+    condition = alltrue([
+      for s in values(var.services) : alltrue([
+        for m in s.mounts : trimspace(m.mount) != "" && !startswith(m.mount, "/") && !endswith(m.mount, "/")
+      ])
+    ])
+    error_message = "services: mounts[*].mount не может быть пустым и пишется без ведущего и завершающего слэша."
+  }
 }
 
 ##############################################################################
@@ -237,6 +255,17 @@ variable "policies" {
       ])
     ])
     error_message = "policies: mounts[*].kv_version — 1 или 2 (либо null, чтобы взять общий kv_version). Иное значение молча трактовалось бы как v1."
+  }
+
+  # То же требование, что и к kv_mount: пустое имя или слэши по краям дают
+  # путь, который Vault принимает и не матчит.
+  validation {
+    condition = alltrue([
+      for p in values(var.policies) : alltrue([
+        for m in p.mounts : trimspace(m.mount) != "" && !startswith(m.mount, "/") && !endswith(m.mount, "/")
+      ])
+    ])
+    error_message = "policies: mounts[*].mount не может быть пустым и пишется без ведущего и завершающего слэша."
   }
 }
 

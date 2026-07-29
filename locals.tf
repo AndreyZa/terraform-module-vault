@@ -152,8 +152,14 @@ locals {
           flatten([
             for path in b.write_paths : b.v2 ? concat([
               {
-                path         = "${b.mount}/data/${path}"
-                capabilities = ["create", "read", "update", "patch"]
+                path = "${b.mount}/data/${path}"
+                # delete здесь — мягкое удаление последней версии, а не стирание:
+                # `vault kv delete <path>` без -versions шлёт DELETE на data/, и
+                # без этого права самая обычная команда удаления отвечала 403,
+                # хотя delete/<path> модуль выдавал. Проверено на живом Vault:
+                # после такого delete секрет скрыт, undelete возвращает прежнее
+                # значение, а destroy остаётся запрещённым.
+                capabilities = ["create", "read", "update", "patch", "delete"]
                 note         = ""
               },
               {

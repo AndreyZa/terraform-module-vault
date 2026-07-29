@@ -94,6 +94,8 @@ module "access" {
 
 Политики приходят из четырёх источников — `services`, `policies`, `policy_files_dir`, `raw_policies` — и складываются. Одно имя в двух источниках валит `plan`: `merge()` оставил бы только последний, а остальные определения потерялись бы молча.
 
+⚠️ `policy_files_dir` по умолчанию `"policies"`, то есть модуль **сам читает `<корневой конфиг>/policies/*.hcl`**, ничего не спрашивая. Отсутствие каталога безопасно — файловых политик просто не будет. Но если каталог с таким именем у вас уже есть под что-то постороннее, его файлы молча станут политиками Vault. Не пользуетесь файловыми политиками — поставьте `policy_files_dir = null` явно, как во всех примерах. Дефолт оставлен прежним намеренно: смена его на `null` тихо удалила бы политики у тех, кто на неявный подхват полагается, а пропавшая политика хуже лишней.
+
 ## Выходы
 
 `policies`, `kubernetes_auth_paths`, `kubernetes_roles`, `jwt_login_path`, `jwt_roles`, `approle_login_path`, `approle_role_ids`.
@@ -250,13 +252,23 @@ cut -d. -f2 <<< "$TOKEN" | base64 -d 2>/dev/null | python3 -m json.tool
 | | KV v1 (`kv_version = 1`, по умолчанию) | KV v2 (`kv_version = 2`) |
 |---|---|---|
 | чтение | `secret/apps/demo/prod` → `read` | `secret/data/…` → `read`, `secret/metadata/…` → `read`, `list` |
-| запись | `…` → `create`, `read`, `update`, `list` | `data/…` → `create`, `read`, `update`, `patch`; `metadata/…` → `create`, `read`, `update`, `list`; `delete/…` и `undelete/…` → `update` |
+| запись | `…` → `create`, `read`, `update`, `list` | `data/…` → `create`, `read`, `update`, `patch`, `delete`; `metadata/…` → `create`, `read`, `update`, `list`; `delete/…` и `undelete/…` → `update` |
 | обход дерева | `…` → `list` | `metadata/…` → `list` |
 | `allow_destroy = true` | добавляет `delete` (в v1 оно сразу безвозвратное) | добавляет `destroy/…` → `update` и `delete` по `metadata/…` |
 
 **`kv_version` обязан совпадать с реальной версией маунта.** Политика, выписанная не под ту версию, синтаксически верна, применяется без единой ошибки и не даёт никаких прав — это самая частая причина «политика есть, а 403». Проверить: `vault read sys/mounts/<kv_mount>` → `options.version` (у v1 поле обычно пустое).
 
-Мягкого удаления в v1 нет, поэтому `write_paths` там не выдаёт `delete` — только с явным `allow_destroy = true`. В v2 `write_paths` даёт `delete/` и `undelete/` (пометить версию удалённой и откатить), а безвозвратные `destroy/` и снос `metadata` — тоже лишь по `allow_destroy`.
+Мягкого удаления в v1 нет, поэтому `write_paths` там не выдаёт `delete` — только с явным `allow_destroy = true`. В v2 `write_paths` даёт мягкое удаление во всех трёх его формах, а безвозвратные `destroy/` и снос `metadata` — лишь по `allow_destroy`.
+
+Форм мягкого удаления в v2 действительно три, и права им нужны разные:
+
+| команда | эндпоинт | нужное право |
+|---|---|---|
+| `vault kv delete <path>` | `DELETE data/<path>` | `delete` на `data/` |
+| `vault kv delete -versions=N <path>` | `POST delete/<path>` | `update` на `delete/` |
+| `vault kv undelete -versions=N <path>` | `POST undelete/<path>` | `update` на `undelete/` |
+
+Первая строка — самая обычная команда, и именно её легко упустить: право на `delete/<path>` её не покрывает, потому что CLI без `-versions` бьёт в `data/`. Все три `write_paths` выдаёт разом. `delete` на `data/` при этом остаётся мягким: секрет скрывается, `undelete` возвращает прежнее значение, `destroy` без `allow_destroy` по-прежнему запрещён.
 
 ### Микс маунтов в одной политике
 
@@ -374,7 +386,7 @@ Accessor метода берётся из `vault auth list -format=json`. Зна
 - неизвестное право в `path_capabilities` / `raw_path_capabilities` / `mounts[*].path_capabilities` (опечатка не отбрасывается с ошибкой, а молча выпадает при сборке правил — получилась бы строфа `capabilities = []`, которую Vault принимает и которая не даёт ничего);
 - `kv_version` не `1`/`2` — в том числе внутри `mounts[*]`, где иное значение молча трактовалось бы как v1;
 - `role_type` не `jwt`/`oidc`, `bound_claims_type` не `string`/`glob`;
-- `kv_mount` с ведущим или завершающим слэшем.
+- `kv_mount` или `mounts[*].mount` пустой либо с ведущим/завершающим слэшем — путь выродился бы в `/data/…`, который Vault принимает и не матчит.
 
 `precondition` — на ресурсах:
 
@@ -386,10 +398,10 @@ Accessor метода берётся из `vault auth list -format=json`. Зна
 - `disable_local_ca_jwt = true` без `ca_cert`/`token_reviewer_jwt` — Vault снаружи кластера получит 401 на каждом TokenReview;
 - `bound_service_account_names = ["*"]` вместе с `namespaces = ["*"]`;
 - имя политики не в нижнем регистре (Vault приводит к lowercase → вечный diff);
-- пустое тело политики;
+- политика без единой `path`-строфы — хоть пустая, хоть из одних комментариев: Vault принимает такую молча, а прав она не даёт;
 - одно имя политики из двух источников; одно имя роли и в `services`, и в `jwt_roles`;
 - `token_ttl` больше `token_explicit_max_ttl` — для всех трёх типов ролей;
-- `token_period` вместе с ненулевым `token_explicit_max_ttl` — для всех трёх типов ролей.
+- `token_period` вместе с ненулевым `token_max_ttl` **или** `token_explicit_max_ttl` — для всех трёх типов ролей. Прижимают оба: на живом Vault роль с `period = 86400` и `token_max_ttl = 900` выдаёт токен с `ttl = 899`, и `renew` его не поднимает.
 
 Пересечение `read_paths` / `write_paths` / `list_paths` **не** запрещено: правила складываются по путям, на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities.
 
