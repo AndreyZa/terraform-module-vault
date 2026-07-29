@@ -216,6 +216,36 @@ cut -d. -f2 <<< "$TOKEN" | base64 -d 2>/dev/null | python3 -m json.tool
 
 Порядок гарантирован: роли зависят от `vault_policy.this`, поэтому в одном apply политика создаётся раньше роли.
 
+## Импорт существующих объектов
+
+Если политика и роль уже заведены руками, их нужно забрать в стейт — иначе `apply` создаст их заново поверх (политику перепишет, роль перетрёт).
+
+Одна запись `services` — это два объекта, импортируются оба:
+
+```bash
+terraform import 'module.access.vault_policy.this["test-terraform-ro"]' test-terraform-ro
+terraform import 'module.access.vault_jwt_auth_backend_role.this["test-terraform-ro"]' auth/jwt_v2/role/test-terraform-ro
+```
+
+Идентификаторы по типам:
+
+| Ресурс | ID для импорта |
+|---|---|
+| `vault_policy.this["<имя>"]` | `<имя>` |
+| `vault_jwt_auth_backend_role.this["<имя>"]` | `auth/<jwt_path>/role/<имя>` |
+| `vault_jwt_auth_backend.this[0]` | `<jwt_path>` |
+| `vault_approle_auth_backend_role.this["<имя>"]` | `auth/<approle_path>/role/<имя>` |
+| `vault_auth_backend.kubernetes["<кластер>"]` | `<auth_path>` (по умолчанию `kubernetes/<кластер>`) |
+| `vault_kubernetes_auth_backend_config.this["<кластер>"]` | `auth/<auth_path>/config` |
+| `vault_kubernetes_auth_backend_role.this["<кластер>/<роль>"]` | `auth/<auth_path>/role/<роль>` |
+| `vault_mount.kv[0]` | `<kv_mount>` |
+
+`module.<имя>.` в адресе — имя вашего `module` блока.
+
+После импорта сделайте `terraform plan`: он покажет, чем живой объект отличается от описанного. У политики почти всегда будет расхождение в шапке — модуль добавляет комментарий «сгенерирована Terraform», — а вот отличия в `path` или `capabilities` означают, что описание разошлось с реальностью, и стоит разобраться до `apply`.
+
+Что уже есть в Vault: `vault policy list`, `vault list auth/<jwt_path>/role`, `vault read auth/<jwt_path>/role/<имя>`.
+
 ## Версионирование
 
 Релизы помечаются тегами `vX.Y.Z`; в `source` всегда указывается `?ref=` на тег, а не на ветку — иначе очередной коммит в `main` уедет в прод при ближайшем `terraform init -upgrade`.
