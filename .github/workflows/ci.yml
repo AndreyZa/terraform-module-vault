@@ -12,13 +12,19 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Нижняя объявленная граница и свежая версия. Именно прогон на границе
+        # ловит регресс: на 1.11 и ниже валидации падают на маунте без явного
+        # kv_version, потому что Terraform вычисляет оба операнда ||.
+        terraform: ["1.12.0", "latest"]
     steps:
       - uses: actions/checkout@v4
 
-      # 1.6+ нужен ради terraform test; сам модуль объявляет >= 1.5.
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
+          terraform_version: ${{ matrix.terraform }}
           terraform_wrapper: false
 
       - name: fmt
@@ -48,7 +54,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
+          terraform_version: "1.12.0"
           terraform_wrapper: false
 
       - name: validate ${{ matrix.example }}

@@ -1,5 +1,9 @@
 terraform {
-  required_version = ">= 1.5"
+  # 1.12, а не 1.5: до неё Terraform вычислял оба операнда ||, и валидация вида
+  # `m.kv_version == null || contains([1, 2], m.kv_version)` падала на самом
+  # обычном случае — маунте без явной версии. Проверено: 1.9, 1.10 и 1.11 валят
+  # terraform test, 1.12.0 проходит.
+  required_version = ">= 1.12"
 
   required_providers {
     vault = {

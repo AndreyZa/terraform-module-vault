@@ -4,7 +4,9 @@ Terraform-модуль для прав доступа в Vault: политики
 
 Провайдер модуль не конфигурирует: адрес, CA и способ логина задаёт корневой конфиг. Один вызов модуля = один Vault.
 
-Требования: Terraform >= 1.5, провайдер `hashicorp/vault` ~> 4.4.
+Требования: Terraform >= 1.12, провайдер `hashicorp/vault` ~> 4.4.
+
+Граница именно 1.12, а не 1.5 как в 1.x: до неё Terraform вычислял оба операнда `||`, и проверка входов вида `m.kv_version == null || contains([1, 2], m.kv_version)` падала на самом обычном случае — маунте без явно заданной версии. Проверено прогоном тестов: 1.9, 1.10 и 1.11 валятся, 1.12.0 проходит.
 
 ## Вызов
 
@@ -12,7 +14,7 @@ Terraform-модуль для прав доступа в Vault: политики
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.1"
 
   kv_mount   = "secret" # обязателен, дефолта нет
   kv_version = 2        # 1 или 2, должно совпадать с маунтом
@@ -102,7 +104,7 @@ module "access" {
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.1"
 
   kv_mount   = "secret"
   kv_version = 1
@@ -426,6 +428,8 @@ terraform import 'module.access.vault_jwt_auth_backend_role.this["test-terraform
 
 ## Обновление с 1.x на 2.0
 
+**Поднялась нижняя граница Terraform: с 1.5 до 1.12.** Причина — в разделе «Требования» выше. Обновлять Terraform придётся до перехода на 2.0.
+
 Адреса ресурсов не изменились — `moved`-блоки и импорт не нужны. Но `plan` теперь падает там, где 1.x молча продолжал, поэтому обновляться стоит не в тот же заход, что и правку прав.
 
 **Что чинить перед обновлением:**
@@ -475,7 +479,9 @@ terraform fmt -recursive
 terraform test          # в корне модуля
 ```
 
-`terraform test` (нужен Terraform >= 1.6) живого Vault не требует: все прогоны — `command = plan`, тело политики известно до `apply`. В [tests/](tests) проверяются раскладка путей v1/v2, слияние пересекающихся путей, микс маунтов и все `precondition`/`validation`.
+`terraform test` живого Vault не требует: все прогоны — `command = plan`, тело политики известно до `apply`. В [tests/](tests) проверяются раскладка путей v1/v2, слияние пересекающихся путей, микс маунтов и все `precondition`/`validation`.
+
+CI гоняет тесты на двух версиях — `1.12.0` (объявленная нижняя граница) и `latest`. Прогон на границе здесь не формальность: расхождение в вычислении `||` между 1.11 и 1.12 ловится только так.
 
 **`terraform validate` одного его не заменяет.** Terraform не типизирует `each.value` статически, поэтому обращение к несуществующему полю объекта `validate` проходит и падает только на `plan` — ровно так в 1.7.0 уехал сломанный AppRole. Тесты этот класс ошибок ловят, `validate` — нет.
 

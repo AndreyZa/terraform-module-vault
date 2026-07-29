@@ -251,6 +251,31 @@ run "mixed_mounts_and_versions_in_one_policy" {
   }
 }
 
+# kv_version внутри mounts необязателен. Отдельный прогон, потому что null здесь
+# — самый обычный случай, а не краевой: на Terraform 1.9 валидация вида
+# "m.kv_version == null || contains(...)" на нём падала (оба операнда || всегда
+# вычисляются, а contains(..., null) — ошибка).
+run "mount_without_kv_version_inherits_the_general_one" {
+  command = plan
+
+  variables {
+    kv_version = 2
+    policies = {
+      "p" = {
+        mounts = [{
+          mount      = "other"
+          read_paths = ["a"]
+        }]
+      }
+    }
+  }
+
+  assert {
+    condition     = strcontains(vault_policy.this["p"].policy, "path \"other/data/a\" {\n  capabilities = [\"read\"]\n}")
+    error_message = "mounts без kv_version должен раскрываться по общему kv_version"
+  }
+}
+
 # Пустая политика применяется без ошибок и молча лишает прав всех, кто на неё
 # ссылается, — precondition обязан её поймать.
 run "empty_policy_is_rejected" {
