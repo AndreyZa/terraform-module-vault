@@ -58,6 +58,10 @@ module "access" {
 | `token_reviewer_jwts` | `map(string)`, sensitive | `{}` | JWT `vault-tokenreviewer` по кластерам |
 | `k8s_roles` | `map(map(object))` | `{}` | `{ кластер = { роль = { namespaces, service_accounts, policies, … } } }` |
 | `default_token_ttl` / `default_token_max_ttl` | `number` | `3600` / `14400` | TTL для ролей, где он не задан |
+| `jwt_path` | `string` | `"jwt"` | путь JWT/OIDC-бэкенда; роли лягут в `auth/<jwt_path>/role/<имя>` |
+| `manage_jwt_backend` | `bool` | `false` | управлять ли конфигом самого метода (issuer, ключи) |
+| `jwt_backend` | `object` | `{}` | конфиг метода — только при `manage_jwt_backend = true` |
+| `jwt_roles` | `map(object)` | `{}` | роли JWT/OIDC: `policies`, `user_claim`, `bound_audiences`, `bound_claims`, … |
 | `approle_path` | `string` | `"approle"` | путь AppRole-бэкенда |
 | `approle_roles` | `map(object)` | `{}` | роли AppRole: `policies`, TTL, ограничения по CIDR |
 
@@ -65,7 +69,44 @@ module "access" {
 
 ## Выходы
 
-`policies`, `kubernetes_auth_paths`, `kubernetes_roles`, `approle_login_path`, `approle_role_ids`.
+`policies`, `kubernetes_auth_paths`, `kubernetes_roles`, `jwt_login_path`, `jwt_roles`, `approle_login_path`, `approle_role_ids`.
+
+## JWT / OIDC роли
+
+Если роли уже живут в `auth/jwt/role`, бэкенд трогать не нужно — модуль по умолчанию только кладёт под него роли:
+
+```hcl
+module "access" {
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.1.0"
+
+  kv_mount   = "secret"
+  kv_version = 1
+
+  policies = {
+    "billing-ro" = { read_paths = ["apps/billing/prod"] }
+  }
+
+  jwt_path = "jwt"          # где уже стоит метод
+
+  jwt_roles = {
+    "billing-ci" = {
+      policies        = ["billing-ro"]
+      user_claim      = "sub"                              # что попадёт в аудит
+      bound_audiences = ["https://vault.example.internal"] # кому выписан токен
+      bound_claims = {                                     # что ещё должно совпасть
+        project_path = "platform/billing"
+        ref          = "main"
+      }
+    }
+  }
+}
+```
+
+Роль обязана быть чем-то ограничена — `bound_audiences`, `bound_subject` или `bound_claims`. Иначе токен получит любой предъявитель валидного JWT от этого issuer'а; модуль валит такой `plan`.
+
+Для шаблонов в значениях (ветки, окружения, репозитории) — `bound_claims_type = "glob"`, тогда работает `ref = "release/*"`.
+
+Конфиг самого метода (issuer, ключи, discovery) можно забрать под Terraform: `manage_jwt_backend = true` + `jwt_backend = {...}` и `terraform import module.<имя>.vault_jwt_auth_backend.this[0] jwt`. По умолчанию выключено намеренно: роли меняются часто, а конфиг метода заводят один раз, и перетереть его чужим apply — уронить логин всем сразу.
 
 ## KV v1 и v2
 
@@ -89,6 +130,9 @@ module "access" {
 `precondition` — валят `plan`:
 
 - роль ссылается на политику, которой нет в конфиге (Vault такую роль создаёт молча, логин проходит, прав нет) — описать политику либо внести имя в `external_policies`;
+- JWT-роль ничем не ограничена (нет ни `bound_audiences`, ни `bound_subject`, ни `bound_claims`);
+- JWT-роль с `role_type = "oidc"` без `allowed_redirect_uris`;
+- `jwt_backend` задаёт больше одного способа проверки подписи;
 - роль привязана к кластеру, которого нет в `clusters`;
 - `disable_local_ca_jwt = true` без `ca_cert`/`token_reviewer_jwt` — Vault снаружи кластера получит 401 на каждом TokenReview;
 - `bound_service_account_names = ["*"]` вместе с `namespaces = ["*"]`;
@@ -109,7 +153,10 @@ module "access" {
 
 ## Пример
 
-[examples/minimal](examples/minimal) — одна политика, одна роль kubernetes, одна AppRole. Проверяется через `terraform init && terraform validate`; применять не обязательно.
+- [examples/minimal](examples/minimal) — одна политика, одна роль kubernetes, одна AppRole;
+- [examples/jwt](examples/jwt) — политика и роль в уже существующем `auth/jwt`.
+
+Оба проверяются через `terraform init && terraform validate`; применять не обязательно.
 
 ## Локальная разработка модуля
 

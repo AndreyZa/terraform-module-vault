@@ -173,6 +173,97 @@ variable "default_token_max_ttl" {
 }
 
 ##############################################################################
+# JWT / OIDC auth
+##############################################################################
+
+variable "jwt_path" {
+  description = "Путь JWT/OIDC-бэкенда. Роли лягут в auth/<jwt_path>/role/<имя>."
+  type        = string
+  default     = "jwt"
+}
+
+variable "manage_jwt_backend" {
+  description = <<-EOT
+    Управлять самим бэкендом (его issuer/ключами) из Terraform. По умолчанию false:
+    роли меняются часто, а конфиг метода заводят один раз, и перетереть его чужим
+    apply — значит уронить логин всем сразу.
+    Чтобы забрать под Terraform существующий: manage_jwt_backend = true и
+    `terraform import module.<имя>.vault_jwt_auth_backend.this[0] <jwt_path>`.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "jwt_backend" {
+  description = <<-EOT
+    Конфиг бэкенда — используется только при manage_jwt_backend = true.
+    Способ проверки подписи ровно один: oidc_discovery_url (по нему Vault сам
+    заберёт JWKS), jwks_url или жёстко заданные jwt_validation_pubkeys.
+  EOT
+  type = object({
+    type                   = optional(string, "jwt") # "jwt" — машинный вход, "oidc" — вход человека через браузер
+    description            = optional(string)
+    oidc_discovery_url     = optional(string)
+    oidc_discovery_ca_pem  = optional(string)
+    jwks_url               = optional(string)
+    jwks_ca_pem            = optional(string)
+    jwt_validation_pubkeys = optional(list(string), [])
+    bound_issuer           = optional(string)
+    jwt_supported_algs     = optional(list(string), [])
+    default_role           = optional(string)
+  })
+  default = {}
+}
+
+variable "jwt_roles" {
+  description = <<-EOT
+    Роли JWT/OIDC: ключ — имя роли (ляжет в auth/<jwt_path>/role/<ключ>).
+    user_claim — какой claim становится именем сущности в Vault (обычно "sub").
+    Ограничение обязательно: bound_audiences, bound_subject или bound_claims,
+    иначе токен получит любой предъявитель валидного JWT этого issuer'а.
+  EOT
+  type = map(object({
+    policies = list(string)
+
+    role_type       = optional(string, "jwt")
+    user_claim      = optional(string, "sub")
+    bound_audiences = optional(list(string), [])
+    bound_subject   = optional(string)
+
+    # claim → допустимое значение (несколько — через запятую).
+    bound_claims = optional(map(string), {})
+    # "string" — точное совпадение, "glob" — разрешает * в значениях.
+    bound_claims_type = optional(string, "string")
+
+    claim_mappings = optional(map(string), {})
+    groups_claim   = optional(string)
+
+    # Только для role_type = "oidc".
+    allowed_redirect_uris = optional(list(string), [])
+
+    clock_skew_leeway            = optional(number)
+    expiration_leeway            = optional(number)
+    not_before_leeway            = optional(number)
+    disable_bound_claims_parsing = optional(bool, false)
+
+    token_ttl         = optional(number)
+    token_max_ttl     = optional(number)
+    token_bound_cidrs = optional(list(string), [])
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for r in values(var.jwt_roles) : contains(["jwt", "oidc"], r.role_type)])
+    error_message = "role_type — \"jwt\" или \"oidc\"."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.jwt_roles) : contains(["string", "glob"], r.bound_claims_type)])
+    error_message = "bound_claims_type — \"string\" или \"glob\"."
+  }
+}
+
+##############################################################################
 # AppRole (CI и внешние потребители)
 ##############################################################################
 
