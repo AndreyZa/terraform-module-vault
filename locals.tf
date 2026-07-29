@@ -34,6 +34,7 @@ locals {
       disable_bound_claims_parsing = s.disable_bound_claims_parsing
       token_ttl                    = s.token_ttl
       token_max_ttl                = s.token_max_ttl
+      token_explicit_max_ttl       = s.token_explicit_max_ttl
       token_bound_cidrs            = s.token_bound_cidrs
     }
   }
@@ -66,6 +67,7 @@ locals {
       disable_bound_claims_parsing = r.disable_bound_claims_parsing
       token_ttl                    = r.token_ttl
       token_max_ttl                = r.token_max_ttl
+      token_explicit_max_ttl       = r.token_explicit_max_ttl
       token_bound_cidrs            = r.token_bound_cidrs
     }
   }, local.service_jwt_roles)

@@ -77,7 +77,10 @@ module "access" {
 | `clusters` | `map(object)` | `{}` | кластеры: `host`, `ca_cert`, `auth_path`, `disable_local_ca_jwt`, TTL маунта |
 | `token_reviewer_jwts` | `map(string)`, sensitive | `{}` | JWT `vault-tokenreviewer` по кластерам |
 | `k8s_roles` | `map(map(object))` | `{}` | `{ кластер = { роль = { namespaces, service_accounts, policies, … } } }` |
-| `default_token_ttl` / `default_token_max_ttl` | `number` | `3600` / `14400` | TTL для ролей, где он не задан |
+| `default_token_ttl` | `number` | `600` | TTL токена (10 мин) |
+| `default_token_max_ttl` | `number` | `900` | предел продления (15 мин) |
+| `default_token_explicit_max_ttl` | `number` | `900` | жёсткий предел жизни токена (15 мин) |
+| `default_token_bound_cidrs` | `list(string)` | `["10.0.0.0/8", "127.0.0.0/8"]` | откуда токен принимается |
 | `jwt_path` | `string` | `"jwt"` | путь JWT/OIDC-бэкенда; роли лягут в `auth/<jwt_path>/role/<имя>` |
 | `manage_jwt_backend` | `bool` | `false` | управлять ли конфигом самого метода (issuer, ключи) |
 | `jwt_backend` | `object` | `{}` | конфиг метода — только при `manage_jwt_backend = true` |
@@ -125,6 +128,30 @@ module "access" {
 Роль обязана быть чем-то ограничена — `bound_audiences`, `bound_subject` или `bound_claims`. Иначе токен получит любой предъявитель валидного JWT от этого issuer'а; модуль валит такой `plan`.
 
 Для шаблонов в значениях (ветки, окружения, репозитории) — `bound_claims_type = "glob"`, тогда работает `ref = "release/*"`. Режим общий для всей карты, не для отдельного claim'а.
+
+### Путь движка
+
+Роли всегда ложатся в `auth/<jwt_path>/role/<имя>`. Если метод поднят не на `jwt`, а, скажем, на `jwt_v2`:
+
+```hcl
+jwt_path = "jwt_v2"   # → auth/jwt_v2/role/test-terraform-ro, логин: auth/jwt_v2/login
+```
+
+Один вызов модуля работает с одним путём. Нужны роли сразу в нескольких (`jwt` и `jwt_v2`) — два вызова модуля с разными `jwt_path`.
+
+### Токены: дефолты
+
+| | значение | что делает |
+|---|---|---|
+| `token_ttl` | 10 мин | сколько живёт свежий токен |
+| `token_max_ttl` | 15 мин | докуда его можно продлевать |
+| `token_explicit_max_ttl` | 15 мин | жёсткий потолок: по истечении токен отзывается, продление не спасает |
+| `token_bound_cidrs` | `10.0.0.0/8`, `127.0.0.0/8` | откуда токен вообще принимается |
+| `user_claim` | `project_id` | что становится именем сущности в аудите |
+
+Меняются глобально через `default_token_*` / `default_token_bound_cidrs` либо точечно в роли. Снять ограничение по сети у одной роли — `token_bound_cidrs = []` (пустой список, не `null`: `null` означает «взять общий»).
+
+`token_ttl` больше `token_explicit_max_ttl` валит `plan`: иначе токен отзывался бы раньше, чем истекал его собственный TTL.
 
 ### bound_claims: значения
 

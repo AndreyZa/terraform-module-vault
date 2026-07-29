@@ -58,10 +58,17 @@ resource "vault_kubernetes_auth_backend_role" "this" {
   bound_service_account_namespaces = each.value.namespaces
   audience                         = each.value.audience
 
-  token_policies    = each.value.policies
-  token_ttl         = coalesce(each.value.token_ttl, var.default_token_ttl)
-  token_max_ttl     = coalesce(each.value.token_max_ttl, var.default_token_max_ttl)
-  token_bound_cidrs = each.value.token_bound_cidrs
+  token_policies         = each.value.policies
+  token_ttl              = coalesce(each.value.token_ttl, var.default_token_ttl)
+  token_max_ttl          = coalesce(each.value.token_max_ttl, var.default_token_max_ttl)
+  token_explicit_max_ttl = coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+
+  # null — берём общий список; [] — роль сознательно снимает ограничение.
+  token_bound_cidrs = (
+    each.value.token_bound_cidrs == null
+    ? var.default_token_bound_cidrs
+    : each.value.token_bound_cidrs
+  )
 
   # Политики — раньше ролей: иначе в одном apply роль может появиться первой
   # и короткое время выдавать токены со ссылкой на ещё несуществующую политику.

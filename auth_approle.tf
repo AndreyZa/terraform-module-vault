@@ -16,10 +16,16 @@ resource "vault_approle_auth_backend_role" "this" {
   backend   = vault_auth_backend.approle[0].path
   role_name = each.key
 
-  token_policies    = each.value.policies
-  token_ttl         = each.value.token_ttl
-  token_max_ttl     = each.value.token_max_ttl
-  token_bound_cidrs = each.value.token_bound_cidrs
+  token_policies         = each.value.policies
+  token_ttl              = coalesce(each.value.token_ttl, var.default_token_ttl)
+  token_max_ttl          = coalesce(each.value.token_max_ttl, var.default_token_max_ttl)
+  token_explicit_max_ttl = coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+
+  token_bound_cidrs = (
+    each.value.token_bound_cidrs == null
+    ? var.default_token_bound_cidrs
+    : each.value.token_bound_cidrs
+  )
 
   secret_id_ttl         = each.value.secret_id_ttl
   secret_id_num_uses    = each.value.secret_id_num_uses

@@ -78,7 +78,7 @@ variable "services" {
 
     # --- вход (как в jwt_roles) ---
     role_type       = optional(string, "jwt")
-    user_claim      = optional(string, "sub")
+    user_claim      = optional(string, "project_id")
     bound_audiences = optional(list(string), [])
     bound_subject   = optional(string)
 
@@ -95,9 +95,10 @@ variable "services" {
     not_before_leeway            = optional(number)
     disable_bound_claims_parsing = optional(bool, false)
 
-    token_ttl         = optional(number)
-    token_max_ttl     = optional(number)
-    token_bound_cidrs = optional(list(string), [])
+    token_ttl              = optional(number) # сек; null → default_token_ttl
+    token_max_ttl          = optional(number)
+    token_explicit_max_ttl = optional(number)
+    token_bound_cidrs      = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
   }))
   default = {}
 
@@ -209,13 +210,14 @@ variable "k8s_roles" {
     из namespaces × service_accounts.
   EOT
   type = map(map(object({
-    namespaces        = list(string)
-    service_accounts  = list(string)
-    policies          = list(string)
-    audience          = optional(string) # ожидаемый aud в JWT, если включён TokenRequest
-    token_ttl         = optional(number) # сек; null → default_token_ttl
-    token_max_ttl     = optional(number)
-    token_bound_cidrs = optional(list(string), [])
+    namespaces             = list(string)
+    service_accounts       = list(string)
+    policies               = list(string)
+    audience               = optional(string) # ожидаемый aud в JWT, если включён TokenRequest
+    token_ttl              = optional(number) # сек; null → default_token_ttl
+    token_max_ttl          = optional(number)
+    token_explicit_max_ttl = optional(number)
+    token_bound_cidrs      = optional(list(string))
   })))
   default = {}
 }
@@ -223,13 +225,33 @@ variable "k8s_roles" {
 variable "default_token_ttl" {
   description = "TTL токена по умолчанию для ролей, где он не задан явно (сек)."
   type        = number
-  default     = 3600
+  default     = 600 # 10 минут
 }
 
 variable "default_token_max_ttl" {
-  description = "Максимальный TTL токена по умолчанию (сек)."
+  description = "Максимальный TTL токена по умолчанию (сек) — предел продления."
   type        = number
-  default     = 14400
+  default     = 900 # 15 минут
+}
+
+variable "default_token_explicit_max_ttl" {
+  description = <<-EOT
+    Жёсткий предел жизни токена по умолчанию (сек). В отличие от token_max_ttl
+    его нельзя обойти продлением: по истечении токен отзывается, чем бы его
+    ни продлевали. 0 — без жёсткого предела.
+  EOT
+  type        = number
+  default     = 900 # 15 минут
+}
+
+variable "default_token_bound_cidrs" {
+  description = <<-EOT
+    Откуда токен принимается по умолчанию. Пустой список — без ограничения.
+    Роль может задать свой список; чтобы снять ограничение точечно, указать
+    в роли token_bound_cidrs = [].
+  EOT
+  type        = list(string)
+  default     = ["10.0.0.0/8", "127.0.0.0/8"]
 }
 
 ##############################################################################
@@ -286,7 +308,7 @@ variable "jwt_roles" {
     policies = list(string)
 
     role_type       = optional(string, "jwt")
-    user_claim      = optional(string, "sub")
+    user_claim      = optional(string, "project_id")
     bound_audiences = optional(list(string), [])
     bound_subject   = optional(string)
 
@@ -306,9 +328,10 @@ variable "jwt_roles" {
     not_before_leeway            = optional(number)
     disable_bound_claims_parsing = optional(bool, false)
 
-    token_ttl         = optional(number)
-    token_max_ttl     = optional(number)
-    token_bound_cidrs = optional(list(string), [])
+    token_ttl              = optional(number) # сек; null → default_token_ttl
+    token_max_ttl          = optional(number)
+    token_explicit_max_ttl = optional(number)
+    token_bound_cidrs      = optional(list(string)) # null → default_token_bound_cidrs, [] → без ограничения
   }))
   default = {}
 
@@ -336,13 +359,14 @@ variable "approle_path" {
 variable "approle_roles" {
   description = "Роли AppRole: ключ — имя роли."
   type = map(object({
-    policies              = list(string)
-    secret_id_ttl         = optional(number, 3600)
-    secret_id_num_uses    = optional(number, 0) # 0 — без ограничения по количеству логинов
-    token_ttl             = optional(number, 1800)
-    token_max_ttl         = optional(number, 3600)
-    token_bound_cidrs     = optional(list(string), [])
-    secret_id_bound_cidrs = optional(list(string), [])
+    policies               = list(string)
+    secret_id_ttl          = optional(number, 3600)
+    secret_id_num_uses     = optional(number, 0) # 0 — без ограничения по количеству логинов
+    token_ttl              = optional(number)
+    token_max_ttl          = optional(number)
+    token_explicit_max_ttl = optional(number)
+    token_bound_cidrs      = optional(list(string))
+    secret_id_bound_cidrs  = optional(list(string), [])
   }))
   default = {}
 }

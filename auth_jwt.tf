@@ -65,10 +65,17 @@ resource "vault_jwt_auth_backend_role" "this" {
   not_before_leeway            = each.value.not_before_leeway
   disable_bound_claims_parsing = each.value.disable_bound_claims_parsing
 
-  token_policies    = each.value.policies
-  token_ttl         = coalesce(each.value.token_ttl, var.default_token_ttl)
-  token_max_ttl     = coalesce(each.value.token_max_ttl, var.default_token_max_ttl)
-  token_bound_cidrs = each.value.token_bound_cidrs
+  token_policies         = each.value.policies
+  token_ttl              = coalesce(each.value.token_ttl, var.default_token_ttl)
+  token_max_ttl          = coalesce(each.value.token_max_ttl, var.default_token_max_ttl)
+  token_explicit_max_ttl = coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+
+  # null — берём общий список; [] — роль сознательно снимает ограничение.
+  token_bound_cidrs = (
+    each.value.token_bound_cidrs == null
+    ? var.default_token_bound_cidrs
+    : each.value.token_bound_cidrs
+  )
 
   # Политики — раньше ролей (см. комментарий в auth_kubernetes.tf).
   depends_on = [vault_policy.this, vault_jwt_auth_backend.this]
@@ -92,6 +99,16 @@ resource "vault_jwt_auth_backend_role" "this" {
     precondition {
       condition     = each.value.role_type != "oidc" || length(each.value.allowed_redirect_uris) > 0
       error_message = "JWT-роль ${each.key} с role_type = \"oidc\" обязана задать allowed_redirect_uris."
+    }
+
+    # token_explicit_max_ttl — жёсткий потолок: токен умрёт раньше, чем отработает
+    # свой token_ttl, и продление не поможет.
+    precondition {
+      condition = (
+        coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
+        || coalesce(each.value.token_ttl, var.default_token_ttl) <= coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl)
+      )
+      error_message = "JWT-роль ${each.key}: token_ttl больше token_explicit_max_ttl — токен будет отозван раньше, чем истечёт его собственный TTL."
     }
   }
 }
