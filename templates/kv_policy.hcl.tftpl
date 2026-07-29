@@ -1,0 +1,16 @@
+# Политика ${name} — сгенерирована Terraform (terraform-module-vault) под KV v${kv_version}.
+# Правки через UI/CLI будут затёрты следующим apply.
+%{ for r in rules ~}
+
+%{ if r.note != "" ~}
+# ${r.note}
+%{ endif ~}
+path "${r.path}" {
+  capabilities = [${join(", ", formatlist("%q", r.capabilities))}]
+}
+%{ endfor ~}
+%{ if extra_rules != "" ~}
+
+# extra_rules
+${extra_rules}
+%{ endif ~}

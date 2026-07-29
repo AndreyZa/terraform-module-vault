@@ -1,0 +1,9 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Модуль не применяется напрямую, но в examples/ можно нечаянно оставить своё.
+terraform.tfvars
+*.auto.tfvars
+!*.example
