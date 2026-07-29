@@ -53,6 +53,66 @@ variable "manage_kv_mount" {
 }
 
 ##############################################################################
+# Сервисы: одна запись — политика + роль
+##############################################################################
+
+variable "services" {
+  description = <<-EOT
+    Обычный случай: сервису нужны свои пути и свой вход. Одна запись создаёт
+    политику <ключ> и JWT-роль <ключ>, уже связанные между собой, — не нужно
+    повторять имя политики в роли и следить, чтобы они не разъехались.
+
+    Раздельные policies / jwt_roles остаются для остального: политика без роли,
+    роль на несколько политик, роль на чужую политику.
+  EOT
+  type = map(object({
+    # --- права (как в policies) ---
+    read_paths    = optional(list(string), [])
+    write_paths   = optional(list(string), [])
+    list_paths    = optional(list(string), [])
+    allow_destroy = optional(bool, false)
+    extra_rules   = optional(string, "")
+
+    # Дополнительные, уже существующие политики этой же роли.
+    extra_policies = optional(list(string), [])
+
+    # --- вход (как в jwt_roles) ---
+    role_type       = optional(string, "jwt")
+    user_claim      = optional(string, "sub")
+    bound_audiences = optional(list(string), [])
+    bound_subject   = optional(string)
+
+    bound_claims      = optional(map(string), {})
+    bound_claims_type = optional(string, "string")
+
+    claim_mappings = optional(map(string), {})
+    groups_claim   = optional(string)
+
+    allowed_redirect_uris = optional(list(string), [])
+
+    clock_skew_leeway            = optional(number)
+    expiration_leeway            = optional(number)
+    not_before_leeway            = optional(number)
+    disable_bound_claims_parsing = optional(bool, false)
+
+    token_ttl         = optional(number)
+    token_max_ttl     = optional(number)
+    token_bound_cidrs = optional(list(string), [])
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for s in values(var.services) : contains(["jwt", "oidc"], s.role_type)])
+    error_message = "role_type — \"jwt\" или \"oidc\"."
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.services) : contains(["string", "glob"], s.bound_claims_type)])
+    error_message = "bound_claims_type — \"string\" или \"glob\"."
+  }
+}
+
+##############################################################################
 # Политики
 ##############################################################################
 

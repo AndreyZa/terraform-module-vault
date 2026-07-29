@@ -39,7 +39,8 @@ resource "vault_jwt_auth_backend" "this" {
 }
 
 resource "vault_jwt_auth_backend_role" "this" {
-  for_each = var.jwt_roles
+  # services и jwt_roles сведены в одну карту в locals.
+  for_each = local.all_jwt_roles
 
   backend   = var.jwt_path
   role_name = each.key

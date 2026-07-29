@@ -1,6 +1,6 @@
 # terraform-module-vault
 
-Terraform-модуль для прав доступа в Vault: политики, `kubernetes` auth (маунт на кластер + роли), AppRole. Значения секретов в KV модуль не трогает — только права на них.
+Terraform-модуль для прав доступа в Vault: политики и роли (`jwt`/`oidc`, `kubernetes`, `approle`). Значения секретов в KV модуль не трогает — только права на них.
 
 Провайдер модуль не конфигурирует: адрес, CA и способ логина задаёт корневой конфиг. Один вызов модуля = один Vault.
 
@@ -8,19 +8,39 @@ Terraform-модуль для прав доступа в Vault: политики
 
 ## Вызов
 
+Обычный случай — сервису нужны свои пути и свой вход. Одна запись в `services` создаёт политику и роль под одним именем, уже связанные между собой:
+
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v0.1.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.2.0"
 
-  kv_mount            = "secret"             # обязателен, дефолта нет
-  kv_version          = 1                    # 1 или 2, должно совпадать с маунтом
-  policy_files_dir    = "policies"           # относительно КОРНЕВОГО конфига
-  token_reviewer_jwts = var.token_reviewer_jwts
+  kv_mount   = "secret" # обязателен, дефолта нет
+  kv_version = 2        # 1 или 2, должно совпадать с маунтом
 
-  policies = {
-    "billing-prod-ro" = {
-      read_paths = ["apps/billing/common", "apps/billing/prod"]
+  services = {
+    "billing" = {
+      # что можно
+      read_paths = ["apps/billing/prod", "apps/billing/common"]
+      list_paths = ["apps/billing"]
+
+      # кому можно — роль ляжет в auth/jwt/role/billing
+      bound_audiences = ["https://vault.example.internal"]
+      bound_claims = {
+        project_path = "platform/billing"
+        ref          = "main"
+      }
     }
+  }
+}
+```
+
+Добавить сервис — одна запись; имя политики нигде не повторяется, разъехаться нечему.
+
+Раздельные `policies` и `jwt_roles` остаются для остального: политика без роли, роль на несколько политик, роль на чужую политику. Там же живут `kubernetes` и `approle`:
+
+```hcl
+  policies = {
+    "billing-prod-ro" = { read_paths = ["apps/billing/prod"] }
   }
 
   clusters = {
@@ -39,7 +59,6 @@ module "access" {
       }
     }
   }
-}
 ```
 
 ## Входы
@@ -50,6 +69,7 @@ module "access" {
 | `kv_version` | `number` | `1` | версия KV-движка: `1` или `2` |
 | `manage_kv_mount` | `bool` | `false` | создавать ли сам маунт (обычно он уже есть) |
 | `kv_description` | `string` | `null` | описание маунта, если модуль его создаёт |
+| `services` | `map(object)` | `{}` | одна запись = политика + JWT-роль под тем же именем |
 | `policies` | `map(object)` | `{}` | политики из путей: `read_paths` / `write_paths` / `list_paths` / `allow_destroy` / `extra_rules` |
 | `policy_files_dir` | `string` | `"policies"` | каталог с рукописными `*.hcl`, **путь от корневого конфига** |
 | `raw_policies` | `map(string)` | `{}` | политики готовым HCL, если он собирается у вызывающего |
@@ -123,6 +143,8 @@ module "access" {
 
 Мягкого удаления в v1 нет, поэтому `write_paths` там не выдаёт `delete` — только с явным `allow_destroy = true`. В v2 `write_paths` даёт `delete/` и `undelete/` (пометить версию удалённой и откатить), а безвозвратные `destroy/` и снос `metadata` — тоже лишь по `allow_destroy`.
 
+Пути из `read_paths`, `write_paths` и `list_paths` можно пересекать: правила складываются по путям, и на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities. (Из двух строф на один путь Vault оставляет последнюю — то есть без такой сборки пересечение молча урезало бы права.)
+
 Всё, что не ложится в шаблон (`sys/`, `transit/`, шаблоны с `{{identity.*}}`), пишется файлом в `policy_files_dir`. Файлу через `templatefile` передаются `mount`, `kv_version`, `data_prefix` и `metadata_prefix` (`""`/`""` для v1, `"data/"`/`"metadata/"` для v2), литеральный доллар экранируется удвоением. Осторожно с путями KV в таких файлах: в v1 оба префикса пусты, и версионно-нейтральная запись даёт две одинаковые `path`-строфы, из которых Vault оставит последнюю. Права на KV лучше описывать через `policies`, а файлом — то, что от версии не зависит.
 
 ## Что проверяется до применения
@@ -153,8 +175,9 @@ module "access" {
 
 ## Пример
 
-- [examples/minimal](examples/minimal) — одна политика, одна роль kubernetes, одна AppRole;
-- [examples/jwt](examples/jwt) — политика и роль в уже существующем `auth/jwt`.
+- [examples/service](examples/service) — одна запись `services`: политика + роль;
+- [examples/jwt](examples/jwt) — то же раздельными `policies` и `jwt_roles`;
+- [examples/minimal](examples/minimal) — политика, роль kubernetes и AppRole.
 
 Оба проверяются через `terraform init && terraform validate`; применять не обязательно.
 

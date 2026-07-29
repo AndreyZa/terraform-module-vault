@@ -17,8 +17,8 @@ resource "vault_policy" "this" {
   }
 }
 
-# Одно имя из двух источников (var.policies / policy_files_dir / var.raw_policies)
-# merge() схлопнул бы молча, оставив последний.
+# Одно имя из нескольких источников (services / policies / policy_files_dir /
+# raw_policies) merge() схлопнул бы молча, оставив последний.
 check "policy_name_collisions" {
   assert {
     condition = length(local.duplicate_policy_names) == 0
@@ -29,20 +29,17 @@ check "policy_name_collisions" {
   }
 }
 
-# Путь, попавший и в read_paths, и в write_paths, даёт две path-строфы на один путь;
-# Vault оставит последнюю, и права окажутся не теми, что написано.
-check "policy_path_overlap" {
+check "jwt_role_name_collisions" {
   assert {
-    condition = alltrue([
-      for name, p in var.policies :
-      length(setintersection(toset(p.read_paths), toset(p.write_paths))) == 0
-    ])
+    condition = length(local.duplicate_jwt_role_names) == 0
     error_message = format(
-      "В политиках %s один и тот же путь указан и в read_paths, и в write_paths — оставить только write_paths (он включает чтение).",
-      join(", ", [
-        for name, p in var.policies :
-        name if length(setintersection(toset(p.read_paths), toset(p.write_paths))) > 0
-      ])
+      "Имена JWT-ролей заданы и в services, и в jwt_roles: %s",
+      join(", ", local.duplicate_jwt_role_names)
     )
   }
 }
+
+# Пересечение read_paths / write_paths / list_paths специально НЕ запрещено:
+# правила складываются по путям (см. local.policy_rules), поэтому одна
+# path-строфа на путь и объединённые capabilities. Раньше здесь стоял check,
+# ловивший пересечение, — он больше не нужен.
