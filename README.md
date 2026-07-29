@@ -12,7 +12,7 @@ Terraform-модуль для прав доступа в Vault: политики
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.2.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.6.0"
 
   kv_mount   = "secret" # обязателен, дефолта нет
   kv_version = 2        # 1 или 2, должно совпадать с маунтом
@@ -101,7 +101,7 @@ module "access" {
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.1.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v1.6.0"
 
   kv_mount   = "secret"
   kv_version = 1
