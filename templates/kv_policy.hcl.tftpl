@@ -1,5 +1,7 @@
 # Политика ${name} — сгенерирована Terraform (terraform-module-vault).
+%{ if mounts_note != "" ~}
 # Маунты: ${mounts_note}.
+%{ endif ~}
 # Правки через UI/CLI будут затёрты следующим apply.
 %{ for r in rules ~}
 

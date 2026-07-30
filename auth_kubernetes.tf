@@ -115,9 +115,11 @@ resource "vault_kubernetes_auth_backend_role" "this" {
 
     # Периодический токен продлевается бесконечно, но любой из двух потолков
     # всё равно его прижмёт (см. комментарий в auth_jwt.tf).
+    # token_period = 0 — «не периодический» (как его понимает провайдер),
+    # а не период в ноль секунд.
     precondition {
       condition = (
-        each.value.token_period == null
+        coalesce(each.value.token_period, 0) == 0
         || (
           coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
           && coalesce(each.value.token_max_ttl, var.default_token_max_ttl) == 0

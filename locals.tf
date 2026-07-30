@@ -164,9 +164,15 @@ locals {
               },
               {
                 path = "${b.mount}/metadata/${path}"
+                # Запись в metadata писателю НЕ выдаётся: create/update на
+                # metadata позволяют `vault kv metadata put -max-versions=1`,
+                # после чего следующая запись безвозвратно вытесняет всю
+                # историю — обход allow_destroy = false (проверено на живом
+                # Vault: версии исчезают из metadata целиком). Кому нужны
+                # custom-metadata — точечно через raw_path_capabilities.
                 capabilities = concat(
-                  ["create", "read", "update", "list"],
-                  b.allow_destroy ? ["delete"] : [],
+                  ["read", "list"],
+                  b.allow_destroy ? ["create", "update", "delete"] : [],
                 )
                 note = b.allow_destroy ? "delete по metadata сносит все версии секрета" : ""
               },
@@ -229,9 +235,12 @@ locals {
     )
   }
 
-  # Порядок capabilities в выводе — канонический, чтобы политика не «дрожала»
-  # в diff от перестановки прав.
-  capability_order = ["create", "read", "update", "patch", "delete", "list", "sudo", "deny"]
+  # Все права, которые Vault принимает в path-строфе (проверено на живом
+  # Vault 2.0.3, включая subscribe и recover). Список один на модуль: он же —
+  # белый список для validation-блоков variables.tf (Terraform >= 1.9 разрешает
+  # ссылаться на locals из validation), он же — канонический порядок прав
+  # в выводе, чтобы политика не «дрожала» в diff от перестановки.
+  valid_capabilities = ["create", "read", "update", "patch", "delete", "list", "subscribe", "recover", "sudo", "deny"]
 
   # Один путь = одна path-строфа. Vault из двух строф на один путь оставляет
   # последнюю, поэтому пересечение read_paths / write_paths / list_paths молча
@@ -241,7 +250,7 @@ locals {
       for p in distinct([for r in rules : r.path]) : {
         path = p
         capabilities = [
-          for c in local.capability_order : c
+          for c in local.valid_capabilities : c
           if contains(distinct(flatten([for r in rules : r.capabilities if r.path == p])), c)
         ]
         note = join("; ", compact(distinct([for r in rules : r.note if r.path == p])))
@@ -249,11 +258,24 @@ locals {
     ]
   }
 
+  # Путь, на котором deny смешан с другими правами. Deny в Vault побеждает всё,
+  # то есть право, добавленное через *_paths, молча превращается в полный запрет —
+  # такой конфликт требуем разрешить явно (precondition в policies.tf).
+  # Ловится только слияние на ОДНОМ пути: deny на более специфичном пути при
+  # гранте на глобе — легальный приём, он живёт в разных строфах.
+  deny_conflicts = {
+    for name, rules in local.policy_rules : name => [
+      for r in rules : r.path if contains(r.capabilities, "deny") && length(r.capabilities) > 1
+    ]
+  }
+
   # Шапка политики: какие маунты и каких версий в неё попали. Для смешанной
-  # политики одной версии в заголовке уже не хватает.
+  # политики одной версии в заголовке уже не хватает. Маунт без единого правила
+  # (политика только из raw_path_capabilities / extra_rules) в шапку не попадает.
   policy_mounts_note = {
     for name, blocks in local.policy_blocks : name => join(", ", [
       for b in blocks : "${b.mount} (kv${b.v2 ? 2 : 1})"
+      if length(b.read_paths) + length(b.write_paths) + length(b.list_paths) + length(b.path_capabilities) > 0
     ])
   }
 

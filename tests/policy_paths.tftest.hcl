@@ -83,6 +83,14 @@ run "kv2_read_write_list" {
     error_message = "v2 write: ожидался secret/data/rw с [create, read, update, patch, delete]"
   }
 
+  # Запись в metadata писателю не выдаётся: create/update на metadata открывают
+  # `kv metadata put -max-versions=1` — безвозвратное вытеснение истории в обход
+  # allow_destroy = false (проверено на живом Vault).
+  assert {
+    condition     = strcontains(vault_policy.this["p"].policy, "path \"secret/metadata/rw\" {\n  capabilities = [\"read\", \"list\"]\n}")
+    error_message = "v2 write без allow_destroy: metadata должен получать только [read, list]"
+  }
+
   # Мягкое удаление входит в write, безвозвратное — нет.
   assert {
     condition     = strcontains(vault_policy.this["p"].policy, "path \"secret/delete/rw\" {\n  capabilities = [\"update\"]\n}")
@@ -275,6 +283,118 @@ run "mount_without_kv_version_inherits_the_general_one" {
   assert {
     condition     = strcontains(vault_policy.this["p"].policy, "path \"other/data/a\" {\n  capabilities = [\"read\"]\n}")
     error_message = "mounts без kv_version должен раскрываться по общему kv_version"
+  }
+}
+
+# subscribe и recover — легальные права Vault (проверено на живом 2.0.3),
+# белый список и канонический порядок обязаны их пропускать.
+run "subscribe_and_recover_are_valid" {
+  command = plan
+
+  variables {
+    kv_version = 2
+    policies = {
+      "p" = { path_capabilities = { "events" = ["recover", "subscribe", "read"] } }
+    }
+  }
+
+  assert {
+    condition     = strcontains(vault_policy.this["p"].policy, "path \"secret/data/events\" {\n  capabilities = [\"read\", \"subscribe\", \"recover\"]\n}")
+    error_message = "subscribe/recover должны проходить валидацию и рендериться в каноническом порядке"
+  }
+}
+
+# deny на ОТДЕЛЬНОМ пути — легален: конфликт ловится только при слиянии
+# с другими правами на одном и том же пути (см. validation.tftest.hcl).
+run "deny_alone_is_allowed" {
+  command = plan
+
+  variables {
+    kv_version = 2
+    policies = {
+      "p" = {
+        read_paths        = ["apps/all"]
+        path_capabilities = { "apps/forbidden" = ["deny"] }
+      }
+    }
+  }
+
+  assert {
+    condition     = strcontains(vault_policy.this["p"].policy, "path \"secret/data/apps/forbidden\" {\n  capabilities = [\"deny\"]\n}")
+    error_message = "одиночный deny должен рендериться как есть"
+  }
+}
+
+# Политика только из raw_path_capabilities не трогает ни одного KV-маунта —
+# шапка «Маунты: …» ей не положена (раньше писала kv_mount всегда).
+run "raw_only_policy_has_no_mounts_header" {
+  command = plan
+
+  variables {
+    kv_version = 2
+    policies = {
+      "p" = { raw_path_capabilities = { "sys/health" = ["read"] } }
+    }
+  }
+
+  assert {
+    condition     = !strcontains(vault_policy.this["p"].policy, "Маунты")
+    error_message = "у политики без KV-правил не должно быть строки «Маунты»"
+  }
+}
+
+# Рукописные политики из каталога: рендер через templatefile с mount и
+# data_prefix, литеральный доллар экранирован удвоением.
+run "file_policies_from_directory" {
+  command = plan
+
+  variables {
+    kv_version       = 2
+    policy_files_dir = "tests/fixtures/policies"
+  }
+
+  assert {
+    condition     = strcontains(vault_policy.this["sample"].policy, "path \"secret/data/fixture/app\" {\n  capabilities = [\"read\"]\n}")
+    error_message = "файловая политика должна получить mount и data_prefix (kv2 → data/)"
+  }
+
+  assert {
+    condition     = strcontains(vault_policy.this["sample"].policy, "sys/health")
+    error_message = "не-KV путь из файла должен пройти как есть"
+  }
+
+  assert {
+    condition     = strcontains(vault_policy.this["sample"].policy, "$${NOT_TF}")
+    error_message = "экранированный доллар должен дойти литеральным $${NOT_TF}"
+  }
+}
+
+# Политика только из extra_rules: правил из путей нет, но path-строфы есть —
+# precondition на строфы должен её пропустить, а рендер — вставить как есть.
+run "extra_rules_only_policy" {
+  command = plan
+
+  variables {
+    kv_version = 2
+    policies = {
+      "p" = {
+        extra_rules = <<-EOT
+          path "transit/encrypt/app" {
+            capabilities = ["update"]
+          }
+        EOT
+      }
+    }
+  }
+
+  assert {
+    condition     = strcontains(vault_policy.this["p"].policy, "path \"transit/encrypt/app\" {\n  capabilities = [\"update\"]\n}")
+    error_message = "extra_rules должны вставляться как есть"
+  }
+
+  assert {
+    condition     = !strcontains(vault_policy.this["p"].policy, "Маунты")
+    error_message = "у extra_rules-политики без KV-правил не должно быть строки «Маунты»"
   }
 }
 

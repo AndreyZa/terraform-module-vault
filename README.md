@@ -14,7 +14,7 @@ Terraform-модуль для прав доступа в Vault: политики
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.0"
 
   kv_mount   = "secret" # обязателен, дефолта нет
   kv_version = 2        # 1 или 2, должно совпадать с маунтом
@@ -106,7 +106,7 @@ module "access" {
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.0.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.0"
 
   kv_mount   = "secret"
   kv_version = 1
@@ -199,7 +199,7 @@ jwt_roles = {
 }
 ```
 
-`token_period` вместе с ненулевым `token_explicit_max_ttl` валит `plan`: потолок сильнее продления.
+`token_period` вместе с ненулевым `token_max_ttl` **или** `token_explicit_max_ttl` валит `plan`: любой из потолков сильнее продления — на живом Vault роль с `period = 86400` и `token_max_ttl = 900` выдаёт токен с `ttl = 899`, и `renew` его не поднимает. `token_period = 0` — «не периодический», такой конфиг легален и ничего не требует.
 
 **Просто длинный** — конечный срок, дальше перелогин:
 
@@ -229,7 +229,9 @@ bound_claims = {
   ref           = "main"
   ref_protected = "true"
 }
+```
 
+```hcl
 bound_claims = {
   project_id = "42,57,91"     # Vault покажет map[project_id:[42 57 91]]
 }
@@ -252,9 +254,9 @@ cut -d. -f2 <<< "$TOKEN" | base64 -d 2>/dev/null | python3 -m json.tool
 | | KV v1 (`kv_version = 1`, по умолчанию) | KV v2 (`kv_version = 2`) |
 |---|---|---|
 | чтение | `secret/apps/demo/prod` → `read` | `secret/data/…` → `read`, `secret/metadata/…` → `read`, `list` |
-| запись | `…` → `create`, `read`, `update`, `list` | `data/…` → `create`, `read`, `update`, `patch`, `delete`; `metadata/…` → `create`, `read`, `update`, `list`; `delete/…` и `undelete/…` → `update` |
+| запись | `…` → `create`, `read`, `update`, `list` | `data/…` → `create`, `read`, `update`, `patch`, `delete`; `metadata/…` → `read`, `list`; `delete/…` и `undelete/…` → `update` |
 | обход дерева | `…` → `list` | `metadata/…` → `list` |
-| `allow_destroy = true` | добавляет `delete` (в v1 оно сразу безвозвратное) | добавляет `destroy/…` → `update` и `delete` по `metadata/…` |
+| `allow_destroy = true` | добавляет `delete` (в v1 оно сразу безвозвратное) | добавляет `destroy/…` → `update` и `create`, `update`, `delete` по `metadata/…` |
 
 **`kv_version` обязан совпадать с реальной версией маунта.** Политика, выписанная не под ту версию, синтаксически верна, применяется без единой ошибки и не даёт никаких прав — это самая частая причина «политика есть, а 403». Проверить: `vault read sys/mounts/<kv_mount>` → `options.version` (у v1 поле обычно пустое).
 
@@ -269,6 +271,16 @@ cut -d. -f2 <<< "$TOKEN" | base64 -d 2>/dev/null | python3 -m json.tool
 | `vault kv undelete -versions=N <path>` | `POST undelete/<path>` | `update` на `undelete/` |
 
 Первая строка — самая обычная команда, и именно её легко упустить: право на `delete/<path>` её не покрывает, потому что CLI без `-versions` бьёт в `data/`. Все три `write_paths` выдаёт разом. `delete` на `data/` при этом остаётся мягким: секрет скрывается, `undelete` возвращает прежнее значение, `destroy` без `allow_destroy` по-прежнему запрещён.
+
+**Запись в `metadata/` писателю не выдаётся** — только чтение и `list`. Причина проверена на живом Vault: `create`/`update` на `metadata/` позволяют `vault kv metadata put -max-versions=1`, после чего следующая запись безвозвратно вытесняет всю историю секрета — то есть обходят `allow_destroy = false` целиком. Кому нужно писать custom-metadata — выдайте точечно:
+
+```hcl
+raw_path_capabilities = {
+  "secret/metadata/apps/demo" = ["update"]
+}
+```
+
+С `allow_destroy = true` запись в `metadata/` есть: там стирание уже разрешено явно.
 
 ### Микс маунтов в одной политике
 
@@ -373,9 +385,11 @@ Accessor метода берётся из `vault auth list -format=json`. Зна
 
 Шаблон Vault пишется в **двойных фигурных скобках** и доллара не содержит, поэтому экранировать в `extra_rules` нечего. `$${...}` — синтаксис Terraform; Vault его не понимает и молча не сматчит путь, политика при этом выглядит правдоподобно.
 
-Пути из `read_paths`, `write_paths` и `list_paths` можно пересекать: правила складываются по путям, и на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities. (Из двух строф на один путь Vault оставляет последнюю — то есть без такой сборки пересечение молча урезало бы права.)
+Пути из `read_paths`, `write_paths` и `list_paths` можно пересекать: правила складываются по путям, и на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities в каноническом порядке. (Современный Vault и сам объединяет повторные строфы — проверено на 2.0.3, — но это поведение менялось между версиями; единая строфа не полагается на него и не «дрожит» в diff.)
 
-Всё, что не ложится в шаблон (`sys/`, `transit/`, шаблоны с `{{identity.*}}`), пишется файлом в `policy_files_dir`. Файлу через `templatefile` передаются `mount`, `kv_version`, `data_prefix` и `metadata_prefix` (`""`/`""` для v1, `"data/"`/`"metadata/"` для v2), литеральный доллар экранируется удвоением. Осторожно с путями KV в таких файлах: в v1 оба префикса пусты, и версионно-нейтральная запись даёт две одинаковые `path`-строфы, из которых Vault оставит последнюю. Права на KV лучше описывать через `policies`, а файлом — то, что от версии не зависит.
+Исключение — `deny`: он побеждает все остальные права строфы, поэтому путь, попавший и в `*_paths`, и в `path_capabilities` с `deny`, после слияния молча терял бы добавленные права. Такой конфликт валит `plan`. `deny` на отдельном пути легален — это другая строфа, и там он работает как задумано.
+
+Всё, что не ложится в шаблон (`sys/`, `transit/`, шаблоны с `{{identity.*}}`), пишется файлом в `policy_files_dir`. Читается только верхний уровень каталога — `policies/team/x.hcl` молча не попадёт. Файлу через `templatefile` передаются `mount`, `kv_version`, `data_prefix` и `metadata_prefix` (`""`/`""` для v1, `"data/"`/`"metadata/"` для v2), литеральный доллар экранируется удвоением. Права на KV лучше описывать через `policies`, а файлом — то, что от версии не зависит: файловые политики модуль не разбирает, и их пересечения с генерируемыми строфами никак не проверяются.
 
 ## Что проверяется до применения
 
@@ -383,25 +397,31 @@ Accessor метода берётся из `vault auth list -format=json`. Зна
 
 `validation` — на входах:
 
-- неизвестное право в `path_capabilities` / `raw_path_capabilities` / `mounts[*].path_capabilities` (опечатка не отбрасывается с ошибкой, а молча выпадает при сборке правил — получилась бы строфа `capabilities = []`, которую Vault принимает и которая не даёт ничего);
+- неизвестное право или **пустой список прав** в `path_capabilities` / `raw_path_capabilities` / `mounts[*].path_capabilities` (и то и другое молча давало бы строфу `capabilities = []`, которую Vault принимает и которая не даёт ничего). Допустимые права: `create`, `read`, `update`, `patch`, `delete`, `list`, `subscribe`, `recover`, `sudo`, `deny`;
 - `kv_version` не `1`/`2` — в том числе внутри `mounts[*]`, где иное значение молча трактовалось бы как v1;
 - `role_type` не `jwt`/`oidc`, `bound_claims_type` не `string`/`glob`;
-- `kv_mount` или `mounts[*].mount` пустой либо с ведущим/завершающим слэшем — путь выродился бы в `/data/…`, который Vault принимает и не матчит.
+- `kv_mount` или `mounts[*].mount` пустой, с ведущим/завершающим слэшем либо с `//` — Vault нормализует путь маунта, политика остаётся как написана и молча не матчит;
+- элементы `read_paths` / `write_paths` / `list_paths` и ключи `path_capabilities` / `raw_path_capabilities` пустые, со слэшами по краям или с `//` — по той же причине;
+- пустые ключи карт (`policies`, `services`, `jwt_roles`, `raw_policies`, `approle_roles`, `clusters`, `k8s_roles`) — plan проходил, apply падал посреди прогона с криптичным 405;
+- отрицательные TTL, `token_period`, `secret_id_ttl`, `secret_id_num_uses`;
+- пустой `user_claim`, пустые или со слэшами по краям `jwt_path` / `approle_path`;
+- `default_lease_ttl` / `max_lease_ttl` кластера не Go-длительность (`"1h"`, `"30m"`).
 
 `precondition` — на ресурсах:
 
 - роль ссылается на политику, которой нет в конфиге (Vault такую роль создаёт молча, логин проходит, прав нет) — описать политику либо внести имя в `external_policies`;
 - JWT-роль ничем не ограничена (нет ни `bound_audiences`, ни `bound_subject`, ни `bound_claims`);
 - JWT-роль с `role_type = "oidc"` без `allowed_redirect_uris`;
-- `jwt_backend` задаёт больше одного способа проверки подписи;
+- `jwt_backend` не задаёт ровно один способ проверки подписи (ноль способов — тоже ошибка);
 - роль привязана к кластеру, которого нет в `clusters`;
 - `disable_local_ca_jwt = true` без `ca_cert`/`token_reviewer_jwt` — Vault снаружи кластера получит 401 на каждом TokenReview;
 - `bound_service_account_names = ["*"]` вместе с `namespaces = ["*"]`;
 - имя политики не в нижнем регистре (Vault приводит к lowercase → вечный diff);
 - политика без единой `path`-строфы — хоть пустая, хоть из одних комментариев: Vault принимает такую молча, а прав она не даёт;
+- `deny` смешан с другими правами на одном пути — deny побеждает, добавленные права молча не работали бы;
 - одно имя политики из двух источников; одно имя роли и в `services`, и в `jwt_roles`;
 - `token_ttl` больше `token_explicit_max_ttl` — для всех трёх типов ролей;
-- `token_period` вместе с ненулевым `token_max_ttl` **или** `token_explicit_max_ttl` — для всех трёх типов ролей. Прижимают оба: на живом Vault роль с `period = 86400` и `token_max_ttl = 900` выдаёт токен с `ttl = 899`, и `renew` его не поднимает.
+- `token_period` вместе с ненулевым `token_max_ttl` **или** `token_explicit_max_ttl` — для всех трёх типов ролей. Прижимают оба: на живом Vault роль с `period = 86400` и `token_max_ttl = 900` выдаёт токен с `ttl = 899`, и `renew` его не поднимает. `token_period = 0` — «не периодический», это не ошибка.
 
 Пересечение `read_paths` / `write_paths` / `list_paths` **не** запрещено: правила складываются по путям, на один путь всегда приходится ровно одна `path`-строфа с объединёнными capabilities.
 
@@ -437,6 +457,31 @@ terraform import 'module.access.vault_jwt_auth_backend_role.this["test-terraform
 После импорта сделайте `terraform plan`: он покажет, чем живой объект отличается от описанного. У политики почти всегда будет расхождение в шапке — модуль добавляет комментарий «сгенерирована Terraform», — а вот отличия в `path` или `capabilities` означают, что описание разошлось с реальностью, и стоит разобраться до `apply`.
 
 Что уже есть в Vault: `vault policy list`, `vault list auth/<jwt_path>/role`, `vault read auth/<jwt_path>/role/<имя>`.
+
+## Снять объект с управления, не удаляя из Vault
+
+Переключить `manage_kv_mount` / `manage_jwt_backend` / `manage_approle_backend` в `false` — это **не** «перестать управлять»: Terraform планирует destroy, а уничтожение auth-бэкенда сносит все роли под ним и ломает логин всем сразу (проверено на живом Vault — apply бодро рапортовал «1 destroyed», роли исчезали, state о них ещё помнил). Поэтому на KV-маунте и обоих бэкендах стоит `prevent_destroy`: такой plan упирается в ошибку `Instance cannot be destroyed` вместо тихой катастрофы.
+
+Правильный порядок — сначала забыть объект в state, потом выключить флаг:
+
+```bash
+terraform state rm 'module.<имя>.vault_mount.kv[0]'              # для manage_kv_mount
+terraform state rm 'module.<имя>.vault_jwt_auth_backend.this[0]' # для manage_jwt_backend
+terraform state rm 'module.<имя>.vault_auth_backend.approle[0]'  # для manage_approle_backend
+```
+
+Kubernetes-бэкендов это не касается: удаление кластера из `clusters` — штатный teardown, он и должен удалять маунт (вместе с ролями этого кластера — убирайте их из `k8s_roles` тем же коммитом). Помните, что смена ключа кластера или `auth_path` — это тоже destroy+create.
+
+## Обновление с 2.0.0 на 2.1.0
+
+Адреса ресурсов не менялись. Два изменения затрагивают выданные права и поведение plan:
+
+- **Писатель теряет запись в `metadata/`** (KV v2, `allow_destroy = false`): `plan` покажет in-place правку политик — `metadata/…` сужается до `read, list`. Это закрытие обхода: `create`/`update` на `metadata/` позволяли безвозвратно стереть историю секрета через `max-versions=1`. Если чей-то workflow писал custom-metadata — верните право точечно через `raw_path_capabilities` (пример в разделе про KV).
+- **Toggle `manage_*` в `false` теперь блокируется** `prevent_destroy` вместо тихого уничтожения бэкенда со всеми ролями. Порядок отключения — раздел «Снять объект с управления».
+
+Остальное строже только там, где раньше был молчаливый отказ или падение на apply: deny-конфликт, пустые списки прав, кривые элементы путей, пустые ключи карт, отрицательные TTL валят `plan`. Единственное послабление: `token_period = 0` больше не считается периодическим токеном — в 2.0.0 такой конфиг ложно валил `plan`.
+
+`jwt_validation_pubkeys` теперь обрезаются `trimspace`: у кого ключ шёл из `file()`, исчезнет вечный diff на `vault_jwt_auth_backend`.
 
 ## Обновление с 1.x на 2.0
 

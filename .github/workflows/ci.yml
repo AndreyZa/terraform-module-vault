@@ -48,7 +48,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [minimal, jwt, service]
+        include:
+          # minimal требует непустые ca_cert/reviewer JWT: его кластер живёт
+          # с disable_local_ca_jwt = true, и precondition этого требует.
+          - example: minimal
+            plan_args: >-
+              -var vault_address=http://127.0.0.1:8200
+              -var token_reviewer_jwt=dummy
+              -var cluster_ca_cert=dummy-pem
+          - example: jwt
+            plan_args: "-var vault_address=http://127.0.0.1:8200"
+          - example: service
+            plan_args: "-var vault_address=http://127.0.0.1:8200"
     steps:
       - uses: actions/checkout@v4
 
@@ -62,3 +73,12 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform validate
+
+      # validate не вычисляет validation/precondition — сломанный пример он
+      # пропустит (так в 1.7.0 уехал нерабочий AppRole). plan вычисляет всё;
+      # живой Vault не нужен, провайдеру хватает фиктивного токена.
+      - name: plan ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        env:
+          VAULT_TOKEN: dummy
+        run: terraform plan -input=false ${{ matrix.plan_args }}

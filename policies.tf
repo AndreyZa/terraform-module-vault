@@ -33,6 +33,20 @@ resource "vault_policy" "this" {
         join(", ", [for src, names in local.policy_sources : src if contains(names, each.key)])
       )
     }
+
+    # deny побеждает все права строфы: путь, попавший и в *_paths, и в
+    # path_capabilities с deny, после слияния получает ["read", "deny"] —
+    # и добавленное право молча не работает (проверено на живом Vault:
+    # token capabilities отвечает deny). Deny на ОТДЕЛЬНОМ пути — легален
+    # и в конфликт не попадает: это разные строфы.
+    precondition {
+      condition = length(lookup(local.deny_conflicts, each.key, [])) == 0
+      error_message = format(
+        "Политика %s: на пути %s deny смешан с другими правами — deny побеждает, добавленные права молча не работают. Уберите путь из *_paths либо оставьте на нём только deny.",
+        each.key,
+        join(", ", lookup(local.deny_conflicts, each.key, []))
+      )
+    }
   }
 }
 

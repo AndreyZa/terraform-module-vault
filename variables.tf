@@ -21,6 +21,14 @@ variable "kv_mount" {
     condition     = trimspace(var.kv_mount) != ""
     error_message = "kv_mount не может быть пустым: пути выродились бы в \"/data/…\", и политика молча перестала бы что-либо разрешать."
   }
+
+  # Vault нормализует "a//b" в "a/b" при создании маунта, а строка в политике
+  # остаётся с "//" — и не матчит ни одного запроса. Проверено на живом Vault:
+  # политика применяется, токен получает 403 на всё.
+  validation {
+    condition     = !strcontains(var.kv_mount, "//")
+    error_message = "kv_mount не может содержать \"//\": Vault нормализует путь маунта, политика остаётся с \"//\" и молча не матчит запросы."
+  }
 }
 
 variable "kv_version" {
@@ -154,17 +162,53 @@ variable "services" {
   }
 
   # Неизвестное право не отбрасывается с ошибкой, а молча выпадает при сборке
-  # правил — на выходе получается path-строфа с capabilities = [], которую Vault
-  # принимает и которая не даёт ничего. Ловим опечатку здесь.
+  # правил; ПУСТОЙ список прав alltrue тоже пропускает — на выходе в обоих
+  # случаях строфа capabilities = [], которую Vault принимает и которая не даёт
+  # ничего. Белый список — local.valid_capabilities, один на модуль.
   validation {
     condition = alltrue([
       for s in values(var.services) : alltrue(concat(
-        [for caps in values(s.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
-        [for caps in values(s.raw_path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
-        [for m in s.mounts : alltrue([for caps in values(m.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])])],
+        [for caps in values(s.path_capabilities) : length(caps) > 0 && alltrue([for c in caps : contains(local.valid_capabilities, c)])],
+        [for caps in values(s.raw_path_capabilities) : length(caps) > 0 && alltrue([for c in caps : contains(local.valid_capabilities, c)])],
+        [for m in s.mounts : alltrue([for caps in values(m.path_capabilities) : length(caps) > 0 && alltrue([for c in caps : contains(local.valid_capabilities, c)])])],
       ))
     ])
-    error_message = "services: в path_capabilities / raw_path_capabilities / mounts[*].path_capabilities допустимы только create, read, update, patch, delete, list, sudo, deny."
+    error_message = "services: в path_capabilities / raw_path_capabilities / mounts[*].path_capabilities допустимы только create, read, update, patch, delete, list, subscribe, recover, sudo, deny, и список прав не может быть пустым."
+  }
+
+  # Пути: не пустые, без ведущего/завершающего слэша, без "//". Ведущий слэш
+  # или пустой элемент дают "secret/data//x" и "secret/data/" — Vault принимает
+  # такую политику и молча не матчит запросы.
+  validation {
+    condition = alltrue([
+      for s in values(var.services) : alltrue([
+        for path in concat(
+          s.read_paths, s.write_paths, s.list_paths,
+          keys(s.path_capabilities), keys(s.raw_path_capabilities),
+          flatten([for m in s.mounts : concat(m.read_paths, m.write_paths, m.list_paths, keys(m.path_capabilities))]),
+        ) : path != "" && !startswith(path, "/") && !endswith(path, "/") && !strcontains(path, "//")
+      ])
+    ])
+    error_message = "services: пути не могут быть пустыми, начинаться/заканчиваться слэшем или содержать \"//\" — такой путь молча не сматчится."
+  }
+
+  validation {
+    condition     = alltrue([for k in keys(var.services) : k != ""])
+    error_message = "services: пустой ключ карты — это политика и роль с пустым именем; plan пройдёт, apply упадёт посреди прогона."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.services) : alltrue([
+        for v in [s.token_ttl, s.token_max_ttl, s.token_explicit_max_ttl, s.token_period] : v == null || v >= 0
+      ])
+    ])
+    error_message = "services: TTL и token_period не могут быть отрицательными — plan прошёл бы, apply упал бы с 400."
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.services) : s.user_claim != ""])
+    error_message = "services: user_claim не может быть пустым — apply упадёт с \"a user claim must be defined on the role\"."
   }
 
   validation {
@@ -176,15 +220,15 @@ variable "services" {
     error_message = "services: mounts[*].kv_version — 1 или 2 (либо null, чтобы взять общий kv_version). Иное значение молча трактовалось бы как v1."
   }
 
-  # То же требование, что и к kv_mount: пустое имя или слэши по краям дают
-  # путь, который Vault принимает и не матчит.
+  # То же требование, что и к kv_mount: пустое имя, слэши по краям или "//"
+  # дают путь, который Vault принимает и не матчит.
   validation {
     condition = alltrue([
       for s in values(var.services) : alltrue([
-        for m in s.mounts : trimspace(m.mount) != "" && !startswith(m.mount, "/") && !endswith(m.mount, "/")
+        for m in s.mounts : trimspace(m.mount) != "" && !startswith(m.mount, "/") && !endswith(m.mount, "/") && !strcontains(m.mount, "//")
       ])
     ])
-    error_message = "services: mounts[*].mount не может быть пустым и пишется без ведущего и завершающего слэша."
+    error_message = "services: mounts[*].mount не может быть пустым, со слэшами по краям или с \"//\"."
   }
 }
 
@@ -235,17 +279,39 @@ variable "policies" {
   default = {}
 
   # Неизвестное право не отбрасывается с ошибкой, а молча выпадает при сборке
-  # правил — на выходе получается path-строфа с capabilities = [], которую Vault
-  # принимает и которая не даёт ничего. Ловим опечатку здесь.
+  # правил; ПУСТОЙ список прав alltrue тоже пропускает — на выходе в обоих
+  # случаях строфа capabilities = [], которую Vault принимает и которая не даёт
+  # ничего. Белый список — local.valid_capabilities, один на модуль.
   validation {
     condition = alltrue([
       for p in values(var.policies) : alltrue(concat(
-        [for caps in values(p.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
-        [for caps in values(p.raw_path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])],
-        [for m in p.mounts : alltrue([for caps in values(m.path_capabilities) : alltrue([for c in caps : contains(["create", "read", "update", "patch", "delete", "list", "sudo", "deny"], c)])])],
+        [for caps in values(p.path_capabilities) : length(caps) > 0 && alltrue([for c in caps : contains(local.valid_capabilities, c)])],
+        [for caps in values(p.raw_path_capabilities) : length(caps) > 0 && alltrue([for c in caps : contains(local.valid_capabilities, c)])],
+        [for m in p.mounts : alltrue([for caps in values(m.path_capabilities) : length(caps) > 0 && alltrue([for c in caps : contains(local.valid_capabilities, c)])])],
       ))
     ])
-    error_message = "policies: в path_capabilities / raw_path_capabilities / mounts[*].path_capabilities допустимы только create, read, update, patch, delete, list, sudo, deny."
+    error_message = "policies: в path_capabilities / raw_path_capabilities / mounts[*].path_capabilities допустимы только create, read, update, patch, delete, list, subscribe, recover, sudo, deny, и список прав не может быть пустым."
+  }
+
+  # Пути: не пустые, без ведущего/завершающего слэша, без "//". Ведущий слэш
+  # или пустой элемент дают "secret/data//x" и "secret/data/" — Vault принимает
+  # такую политику и молча не матчит запросы.
+  validation {
+    condition = alltrue([
+      for p in values(var.policies) : alltrue([
+        for path in concat(
+          p.read_paths, p.write_paths, p.list_paths,
+          keys(p.path_capabilities), keys(p.raw_path_capabilities),
+          flatten([for m in p.mounts : concat(m.read_paths, m.write_paths, m.list_paths, keys(m.path_capabilities))]),
+        ) : path != "" && !startswith(path, "/") && !endswith(path, "/") && !strcontains(path, "//")
+      ])
+    ])
+    error_message = "policies: пути не могут быть пустыми, начинаться/заканчиваться слэшем или содержать \"//\" — такой путь молча не сматчится."
+  }
+
+  validation {
+    condition     = alltrue([for k in keys(var.policies) : k != ""])
+    error_message = "policies: пустой ключ карты — это политика с пустым именем; plan пройдёт, apply упадёт с криптичным 405."
   }
 
   validation {
@@ -257,25 +323,27 @@ variable "policies" {
     error_message = "policies: mounts[*].kv_version — 1 или 2 (либо null, чтобы взять общий kv_version). Иное значение молча трактовалось бы как v1."
   }
 
-  # То же требование, что и к kv_mount: пустое имя или слэши по краям дают
-  # путь, который Vault принимает и не матчит.
+  # То же требование, что и к kv_mount: пустое имя, слэши по краям или "//"
+  # дают путь, который Vault принимает и не матчит.
   validation {
     condition = alltrue([
       for p in values(var.policies) : alltrue([
-        for m in p.mounts : trimspace(m.mount) != "" && !startswith(m.mount, "/") && !endswith(m.mount, "/")
+        for m in p.mounts : trimspace(m.mount) != "" && !startswith(m.mount, "/") && !endswith(m.mount, "/") && !strcontains(m.mount, "//")
       ])
     ])
-    error_message = "policies: mounts[*].mount не может быть пустым и пишется без ведущего и завершающего слэша."
+    error_message = "policies: mounts[*].mount не может быть пустым, со слэшами по краям или с \"//\"."
   }
 }
 
 variable "policy_files_dir" {
   description = <<-EOT
     Каталог с политиками, написанными руками (путь ОТНОСИТЕЛЬНО корневого конфига,
-    не модуля). Каждый <имя>.hcl становится политикой <имя>. Файл прогоняется через
-    templatefile, ему доступны mount, kv_version, data_prefix и metadata_prefix
-    ("" / "" для v1, "data/" / "metadata/" для v2) — так рукописная политика
-    переживает смену версии маунта. Литеральный доллар экранируется удвоением.
+    не модуля). Каждый <имя>.hcl становится политикой <имя>. Читается ТОЛЬКО
+    верхний уровень каталога: policies/team/x.hcl молча не попадёт. Файл
+    прогоняется через templatefile, ему доступны mount, kv_version, data_prefix
+    и metadata_prefix ("" / "" для v1, "data/" / "metadata/" для v2) — так
+    рукописная политика переживает смену версии маунта. Литеральный доллар
+    экранируется удвоением.
     Каталога может не быть — тогда файловых политик просто нет, как и при null или "".
   EOT
   type        = string
@@ -291,6 +359,11 @@ variable "raw_policies" {
   EOT
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.raw_policies) : k != ""])
+    error_message = "raw_policies: пустой ключ карты — это политика с пустым именем; plan пройдёт, apply упадёт с криптичным 405."
+  }
 }
 
 variable "external_policies" {
@@ -321,6 +394,22 @@ variable "clusters" {
     max_lease_ttl        = optional(string, "24h")
   }))
   default = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.clusters) : k != ""])
+    error_message = "clusters: пустой ключ карты недопустим — из него строится путь auth-маунта."
+  }
+
+  # Go-длительность: "1h", "30m", "1h30m". Иной формат переживает plan
+  # и падает только на apply при tune маунта.
+  validation {
+    condition = alltrue([
+      for c in values(var.clusters) : alltrue([
+        for d in [c.default_lease_ttl, c.max_lease_ttl] : can(regex("^([0-9]+(ns|us|ms|s|m|h))+$", d))
+      ])
+    ])
+    error_message = "clusters: default_lease_ttl / max_lease_ttl — Go-длительность вида \"1h\", \"30m\", \"1h30m\"."
+  }
 }
 
 variable "token_reviewer_jwts" {
@@ -363,18 +452,46 @@ variable "k8s_roles" {
     token_bound_cidrs       = optional(list(string))
   })))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for cluster, roles in var.k8s_roles : cluster != "" && alltrue([for role in keys(roles) : role != ""])
+    ])
+    error_message = "k8s_roles: пустые ключи (имя кластера или роли) недопустимы — из них строятся пути."
+  }
+
+  validation {
+    condition = alltrue([
+      for roles in values(var.k8s_roles) : alltrue([
+        for r in values(roles) : alltrue([
+          for v in [r.token_ttl, r.token_max_ttl, r.token_explicit_max_ttl, r.token_period] : v == null || v >= 0
+        ])
+      ])
+    ])
+    error_message = "k8s_roles: TTL и token_period не могут быть отрицательными — plan прошёл бы, apply упал бы с 400."
+  }
 }
 
 variable "default_token_ttl" {
   description = "TTL токена по умолчанию для ролей, где он не задан явно (сек)."
   type        = number
   default     = 600 # 10 минут
+
+  validation {
+    condition     = var.default_token_ttl >= 0
+    error_message = "default_token_ttl не может быть отрицательным."
+  }
 }
 
 variable "default_token_max_ttl" {
   description = "Максимальный TTL токена по умолчанию (сек) — предел продления."
   type        = number
   default     = 900 # 15 минут
+
+  validation {
+    condition     = var.default_token_max_ttl >= 0
+    error_message = "default_token_max_ttl не может быть отрицательным."
+  }
 }
 
 variable "default_token_explicit_max_ttl" {
@@ -385,6 +502,11 @@ variable "default_token_explicit_max_ttl" {
   EOT
   type        = number
   default     = 900 # 15 минут
+
+  validation {
+    condition     = var.default_token_explicit_max_ttl >= 0
+    error_message = "default_token_explicit_max_ttl не может быть отрицательным."
+  }
 }
 
 variable "default_token_bound_cidrs" {
@@ -419,6 +541,11 @@ variable "jwt_path" {
   description = "Путь JWT/OIDC-бэкенда. Роли лягут в auth/<jwt_path>/role/<имя>."
   type        = string
   default     = "jwt"
+
+  validation {
+    condition     = trimspace(var.jwt_path) != "" && !startswith(var.jwt_path, "/") && !endswith(var.jwt_path, "/")
+    error_message = "jwt_path не может быть пустым или со слэшами по краям: роли легли бы в auth//role/…, plan прошёл бы, apply упал."
+  }
 }
 
 variable "manage_jwt_backend" {
@@ -511,6 +638,25 @@ variable "jwt_roles" {
     condition     = alltrue([for r in values(var.jwt_roles) : contains(["string", "glob"], r.bound_claims_type)])
     error_message = "bound_claims_type — \"string\" или \"glob\"."
   }
+
+  validation {
+    condition     = alltrue([for k in keys(var.jwt_roles) : k != ""])
+    error_message = "jwt_roles: пустой ключ карты — это роль с пустым именем; plan пройдёт, apply упадёт."
+  }
+
+  validation {
+    condition = alltrue([
+      for r in values(var.jwt_roles) : alltrue([
+        for v in [r.token_ttl, r.token_max_ttl, r.token_explicit_max_ttl, r.token_period] : v == null || v >= 0
+      ])
+    ])
+    error_message = "jwt_roles: TTL и token_period не могут быть отрицательными — plan прошёл бы, apply упал бы с 400."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.jwt_roles) : r.user_claim != ""])
+    error_message = "jwt_roles: user_claim не может быть пустым — apply упадёт с \"a user claim must be defined on the role\"."
+  }
 }
 
 ##############################################################################
@@ -521,6 +667,11 @@ variable "approle_path" {
   description = "Путь AppRole-бэкенда."
   type        = string
   default     = "approle"
+
+  validation {
+    condition     = trimspace(var.approle_path) != "" && !startswith(var.approle_path, "/") && !endswith(var.approle_path, "/")
+    error_message = "approle_path не может быть пустым или со слэшами по краям."
+  }
 }
 
 variable "manage_approle_backend" {
@@ -560,4 +711,18 @@ variable "approle_roles" {
     secret_id_bound_cidrs   = optional(list(string), [])
   }))
   default = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.approle_roles) : k != ""])
+    error_message = "approle_roles: пустой ключ карты — это роль с пустым именем; plan пройдёт, apply упадёт."
+  }
+
+  validation {
+    condition = alltrue([
+      for r in values(var.approle_roles) : alltrue([
+        for v in [r.token_ttl, r.token_max_ttl, r.token_explicit_max_ttl, r.token_period, r.secret_id_ttl, r.secret_id_num_uses] : v == null || v >= 0
+      ])
+    ])
+    error_message = "approle_roles: TTL, token_period, secret_id_ttl и secret_id_num_uses не могут быть отрицательными."
+  }
 }

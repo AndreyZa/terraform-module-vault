@@ -14,6 +14,170 @@ variables {
 }
 
 ##############################################################################
+# Пустой список прав. alltrue по пустому списку — true, поэтому валидация 2.0.0
+# его пропускала, а precondition по path-строфам проходил: строфа-то есть,
+# просто с capabilities = [] — Vault принимает, прав ноль.
+##############################################################################
+
+run "empty_caps_in_policies" {
+  command = plan
+
+  variables {
+    policies = { "p" = { path_capabilities = { "x" = [] } } }
+  }
+
+  expect_failures = [var.policies]
+}
+
+run "empty_caps_in_services_mounts" {
+  command = plan
+
+  variables {
+    services = {
+      "s" = {
+        bound_subject = "sub"
+        mounts        = [{ mount = "other", path_capabilities = { "x" = [] } }]
+      }
+    }
+  }
+
+  expect_failures = [var.services]
+}
+
+##############################################################################
+# deny, смешанный с другими правами на одном пути: deny побеждает, добавленное
+# право молча не работает (проверено на живом Vault). Конфликт — ошибка plan.
+##############################################################################
+
+run "deny_mixed_with_grant_fails" {
+  command = plan
+
+  variables {
+    policies = {
+      "p" = {
+        read_paths        = ["team/prod"]
+        path_capabilities = { "team/prod" = ["deny"] }
+      }
+    }
+  }
+
+  expect_failures = [vault_policy.this["p"]]
+}
+
+##############################################################################
+# Элементы путей: ведущий/завершающий слэш, пустая строка, "//" — Vault
+# принимает такую политику и молча не матчит запросы.
+##############################################################################
+
+run "leading_slash_in_read_paths" {
+  command = plan
+
+  variables {
+    policies = { "p" = { read_paths = ["/abs/path"] } }
+  }
+
+  expect_failures = [var.policies]
+}
+
+run "empty_element_in_read_paths" {
+  command = plan
+
+  variables {
+    services = { "s" = { read_paths = [""], bound_subject = "sub" } }
+  }
+
+  expect_failures = [var.services]
+}
+
+run "double_slash_in_kv_mount" {
+  command = plan
+
+  variables {
+    kv_mount = "a//b"
+    policies = { "p" = { read_paths = ["x"] } }
+  }
+
+  expect_failures = [var.kv_mount]
+}
+
+##############################################################################
+# Пустые ключи карт и прочие значения, доживавшие до apply.
+##############################################################################
+
+run "empty_policy_name_key" {
+  command = plan
+
+  variables {
+    policies = { "" = { read_paths = ["a"] } }
+  }
+
+  expect_failures = [var.policies]
+}
+
+run "empty_jwt_role_name_key" {
+  command = plan
+
+  variables {
+    jwt_roles = { "" = { policies = ["default"], bound_subject = "s" } }
+  }
+
+  expect_failures = [var.jwt_roles]
+}
+
+run "empty_jwt_path" {
+  command = plan
+
+  variables {
+    jwt_path  = ""
+    jwt_roles = { "r" = { policies = ["default"], bound_subject = "s" } }
+  }
+
+  expect_failures = [var.jwt_path]
+}
+
+run "negative_token_ttl" {
+  command = plan
+
+  variables {
+    jwt_roles = { "r" = { policies = ["default"], bound_subject = "s", token_ttl = -5 } }
+  }
+
+  expect_failures = [var.jwt_roles]
+}
+
+run "negative_secret_id_ttl" {
+  command = plan
+
+  variables {
+    approle_roles = { "ci" = { policies = ["default"], secret_id_ttl = -1 } }
+  }
+
+  expect_failures = [var.approle_roles]
+}
+
+run "empty_user_claim" {
+  command = plan
+
+  variables {
+    jwt_roles = { "r" = { policies = ["default"], bound_subject = "s", user_claim = "" } }
+  }
+
+  expect_failures = [var.jwt_roles]
+}
+
+run "bad_lease_ttl_format" {
+  command = plan
+
+  variables {
+    clusters = {
+      "c" = { host = "https://api.c:6443", disable_local_ca_jwt = false, default_lease_ttl = "1 hour" }
+    }
+  }
+
+  expect_failures = [var.clusters]
+}
+
+##############################################################################
 # Опечатка в capability. Неизвестное право не отбрасывалось с ошибкой, а молча
 # выпадало при сборке правил — на выходе получалась строфа capabilities = [],
 # которую Vault принимает и которая не даёт ничего.
@@ -295,6 +459,49 @@ run "k8s_role_period_with_explicit_max" {
           service_accounts = ["sa"]
           policies         = ["default"]
           token_period     = 86400
+        }
+      }
+    }
+  }
+
+  expect_failures = [vault_kubernetes_auth_backend_role.this["c/r"]]
+}
+
+# token_period = 0 — «не периодический», как его понимает провайдер, а не
+# период в ноль секунд. В 2.0.0 такой конфиг валил plan ложным срабатыванием.
+run "token_period_zero_is_not_periodic" {
+  command = plan
+
+  variables {
+    jwt_roles = {
+      "r" = { policies = ["default"], bound_subject = "s", token_period = 0 }
+    }
+  }
+
+  assert {
+    condition     = vault_jwt_auth_backend_role.this["r"].token_period == 0
+    error_message = "token_period = 0 должен проходить plan с дефолтными потолками"
+  }
+}
+
+# Ветка token_explicit_max_ttl периодического guard'а: до 2.1 её удаление
+# переживало все тесты — period-тесты падали через дефолтный token_max_ttl.
+run "k8s_role_period_with_only_explicit_max" {
+  command = plan
+
+  variables {
+    clusters = {
+      "c" = { host = "https://api.c:6443", disable_local_ca_jwt = false }
+    }
+    k8s_roles = {
+      "c" = {
+        "r" = {
+          namespaces             = ["ns"]
+          service_accounts       = ["sa"]
+          policies               = ["default"]
+          token_period           = 86400
+          token_max_ttl          = 0
+          token_explicit_max_ttl = 900
         }
       }
     }

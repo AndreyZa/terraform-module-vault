@@ -17,9 +17,12 @@ resource "vault_jwt_auth_backend" "this" {
   oidc_discovery_ca_pem = var.jwt_backend.oidc_discovery_ca_pem
   jwks_url              = var.jwt_backend.jwks_url
   jwks_ca_pem           = var.jwt_backend.jwks_ca_pem
+  # trimspace: file("key.pem") оставляет хвостовой перевод строки, Vault хранит
+  # PEM без него — без обрезки plan показывает diff на каждом прогоне вечно
+  # (проверено на живом Vault).
   jwt_validation_pubkeys = (
     length(var.jwt_backend.jwt_validation_pubkeys) > 0
-    ? var.jwt_backend.jwt_validation_pubkeys
+    ? [for k in var.jwt_backend.jwt_validation_pubkeys : trimspace(k)]
     : null
   )
   bound_issuer       = var.jwt_backend.bound_issuer
@@ -27,6 +30,13 @@ resource "vault_jwt_auth_backend" "this" {
   default_role       = var.jwt_backend.default_role
 
   lifecycle {
+    # Уничтожение бэкенда сносит ВСЕ роли под ним и ломает логин всем сразу —
+    # проверено на живом Vault: toggle manage_* true -> false тихо это и делал,
+    # рапортуя «1 destroyed». Снять бэкенд с управления, не трогая его в Vault:
+    #   terraform state rm 'module.<имя>.vault_jwt_auth_backend.this[0]'
+    # и только потом manage_jwt_backend = false.
+    prevent_destroy = true
+
     precondition {
       condition = length(compact([
         var.jwt_backend.oidc_discovery_url,
@@ -123,10 +133,11 @@ resource "vault_jwt_auth_backend_role" "this" {
     # Периодический токен продлевается бесконечно, но любой из двух потолков
     # всё равно его прижмёт. Проверено на живом Vault: при period = 86400
     # и token_max_ttl = 900 выдаётся ttl = 899, и renew его не поднимает —
-    # период задавлен полностью.
+    # период задавлен полностью. token_period = 0 — это «не периодический»
+    # (как его понимает провайдер), а не период в ноль секунд.
     precondition {
       condition = (
-        each.value.token_period == null
+        coalesce(each.value.token_period, 0) == 0
         || (
           coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
           && coalesce(each.value.token_max_ttl, var.default_token_max_ttl) == 0

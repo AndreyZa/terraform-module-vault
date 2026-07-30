@@ -12,7 +12,10 @@ output "kubernetes_roles" {
   description = "Роли kubernetes auth: кластер/роль → login-путь и выданные политики."
   value = {
     for k, r in local.k8s_roles_flat : k => {
-      login_path = "auth/${local.cluster_auth_paths[r.cluster]}/login"
+      # try: при роли на несуществующий кластер жёсткая индексация валилась бы
+      # сырым «Invalid index» ПОВЕРХ внятного precondition из auth_kubernetes.tf.
+      # null здесь недостижим в валидном конфиге — plan упадёт на precondition.
+      login_path = try("auth/${local.cluster_auth_paths[r.cluster]}/login", null)
       role       = r.role
       policies   = r.policies
       namespaces = r.namespaces

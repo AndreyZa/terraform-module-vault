@@ -8,6 +8,15 @@ resource "vault_auth_backend" "approle" {
   type        = "approle"
   path        = var.approle_path
   description = "AppRole для CI и внешних потребителей (managed by Terraform)"
+
+  lifecycle {
+    # Уничтожение бэкенда сносит ВСЕ роли под ним — проверено на живом Vault:
+    # toggle manage_approle_backend true -> false (или approle_roles -> {})
+    # тихо это и делал, рапортуя «1 destroyed», а роли в state оставались.
+    # Снять бэкенд с управления, не трогая его в Vault:
+    #   terraform state rm 'module.<имя>.vault_auth_backend.approle[0]'
+    prevent_destroy = true
+  }
 }
 
 resource "vault_approle_auth_backend_role" "this" {
@@ -56,10 +65,11 @@ resource "vault_approle_auth_backend_role" "this" {
     }
 
     # Периодический токен продлевается бесконечно, но любой из двух потолков
-    # всё равно его прижмёт (см. комментарий в auth_jwt.tf).
+    # всё равно его прижмёт (см. комментарий в auth_jwt.tf). token_period = 0 —
+    # «не периодический», а не период в ноль секунд.
     precondition {
       condition = (
-        each.value.token_period == null
+        coalesce(each.value.token_period, 0) == 0
         || (
           coalesce(each.value.token_explicit_max_ttl, var.default_token_explicit_max_ttl) == 0
           && coalesce(each.value.token_max_ttl, var.default_token_max_ttl) == 0

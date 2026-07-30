@@ -22,8 +22,10 @@ run "approle_plans" {
     policies = { "ci-ro" = { read_paths = ["apps/ci"] } }
     approle_roles = {
       "ci" = {
-        policies      = ["ci-ro"]
-        secret_id_ttl = 600
+        policies = ["ci-ro"]
+        # Нарочно не 600: иначе assert на token_ttl == 600 не отличал бы
+        # default_token_ttl от secret_id_ttl того же значения.
+        secret_id_ttl = 777
       }
     }
   }
@@ -41,6 +43,11 @@ run "approle_plans" {
   assert {
     condition     = vault_approle_auth_backend_role.this["ci"].token_ttl == 600
     error_message = "не подставился default_token_ttl"
+  }
+
+  assert {
+    condition     = vault_approle_auth_backend_role.this["ci"].secret_id_ttl == 777
+    error_message = "secret_id_ttl не доехал до ресурса"
   }
 }
 
@@ -186,6 +193,24 @@ run "kubernetes_roles_and_outputs" {
   assert {
     condition     = vault_kubernetes_auth_backend_role.this["prod/app"].token_bound_cidrs == toset(["127.0.0.0/8", "10.0.0.0/8"])
     error_message = "token_bound_cidrs должен наследоваться из default_token_bound_cidrs"
+  }
+}
+
+# trimspace на pubkeys: file("key.pem") оставляет хвостовой \n, Vault хранит
+# PEM без него — без обрезки plan показывал diff вечно (проверено на живом).
+run "jwt_backend_pubkeys_are_trimmed" {
+  command = plan
+
+  variables {
+    manage_jwt_backend = true
+    jwt_backend = {
+      jwt_validation_pubkeys = ["-----BEGIN PUBLIC KEY-----\nAAA\n-----END PUBLIC KEY-----\n\n"]
+    }
+  }
+
+  assert {
+    condition     = vault_jwt_auth_backend.this[0].jwt_validation_pubkeys[0] == "-----BEGIN PUBLIC KEY-----\nAAA\n-----END PUBLIC KEY-----"
+    error_message = "pubkeys должны обрезаться trimspace, иначе вечный diff"
   }
 }
 
