@@ -165,6 +165,37 @@ run "empty_user_claim" {
   expect_failures = [var.jwt_roles]
 }
 
+# Внешний Vault (disable_local_ca_jwt = true) обязан иметь ca_cert —
+# TLS до API-сервера без него не поднимется.
+run "external_cluster_requires_ca_cert" {
+  command = plan
+
+  variables {
+    clusters = {
+      "c" = { host = "https://api.c:6443" }
+    }
+  }
+
+  expect_failures = [vault_kubernetes_auth_backend_config.this["c"]]
+}
+
+# Reviewer JWT модуль не настраивает вовсе (убран в 3.0.0): валидация идёт
+# клиентским JWT либо локальным SA-токеном Vault.
+run "external_cluster_with_ca_has_no_reviewer" {
+  command = plan
+
+  variables {
+    clusters = {
+      "c" = { host = "https://api.c:6443", ca_cert = "PEM" }
+    }
+  }
+
+  assert {
+    condition     = vault_kubernetes_auth_backend_config.this["c"].token_reviewer_jwt == null
+    error_message = "token_reviewer_jwt не должен настраиваться модулем"
+  }
+}
+
 run "bad_lease_ttl_format" {
   command = plan
 

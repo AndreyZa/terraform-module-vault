@@ -14,7 +14,7 @@ Terraform-модуль для прав доступа в Vault: политики
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.1"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v3.0.0"
 
   kv_mount   = "secret" # обязателен, дефолта нет
   kv_version = 2        # 1 или 2, должно совпадать с маунтом
@@ -77,8 +77,7 @@ module "access" {
 | `raw_policies` | `map(string)` | `{}` | политики готовым HCL, если он собирается у вызывающего |
 | `external_policies` | `list(string)` | `[]` | чужие политики, на которые ролям разрешено ссылаться |
 | `clusters` | `map(object)` | `{}` | кластеры: `host`, `ca_cert`, `auth_path`, `disable_local_ca_jwt`, TTL маунта |
-| `token_reviewer_jwts` | `map(string)`, sensitive | `{}` | JWT `vault-tokenreviewer` по кластерам |
-| `k8s_roles` | `map(map(object))` | `{}` | `{ кластер = { роль = { namespaces, service_accounts, policies, … } } }` |
+| `k8s_roles` | `map(map(object))` | `{}` | `{ кластер = { роль = { namespaces, service_accounts, policies, audience, … } } }` |
 | `default_token_ttl` | `number` | `600` | TTL токена (10 мин) |
 | `default_token_max_ttl` | `number` | `900` | предел продления (15 мин) |
 | `default_token_explicit_max_ttl` | `number` | `900` | жёсткий предел жизни токена (15 мин) |
@@ -106,7 +105,7 @@ module "access" {
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.1"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v3.0.0"
 
   kv_mount   = "secret"
   kv_version = 1
@@ -414,7 +413,7 @@ Accessor метода берётся из `vault auth list -format=json`. Зна
 - JWT-роль с `role_type = "oidc"` без `allowed_redirect_uris`;
 - `jwt_backend` не задаёт ровно один способ проверки подписи (ноль способов — тоже ошибка);
 - роль привязана к кластеру, которого нет в `clusters`;
-- `disable_local_ca_jwt = true` без `ca_cert`/`token_reviewer_jwt` — Vault снаружи кластера получит 401 на каждом TokenReview;
+- `disable_local_ca_jwt = true` без `ca_cert` — Vault снаружи кластера, и TLS до API-сервера без CA не поднимется;
 - `bound_service_account_names = ["*"]` вместе с `namespaces = ["*"]`;
 - имя политики не в нижнем регистре (Vault приводит к lowercase → вечный diff);
 - политика без единой `path`-строфы — хоть пустая, хоть из одних комментариев: Vault принимает такую молча, а прав она не даёт;
@@ -482,6 +481,24 @@ vault auth disable approle   # бэкенд остался в Vault — снес
 То же ограничение у полного удаления вызова модуля: `prevent_destroy` на KV-маунте и бэкендах остановит destroy — сначала `state rm` этих ресурсов.
 
 Kubernetes-бэкендов это не касается: удаление кластера из `clusters` — штатный teardown, он и должен удалять маунт (вместе с ролями этого кластера — убирайте их из `k8s_roles` тем же коммитом). Помните, что смена ключа кластера или `auth_path` — это тоже destroy+create.
+
+## Обновление с 2.1.x на 3.0.0
+
+Единственное изменение — **удалён вход `token_reviewer_jwts`**: модуль больше не настраивает reviewer JWT у kubernetes auth. Причины: это долгоживущий токен с `system:auth-delegator`, он попадал в Terraform state открытым текстом (`sensitive` прячет значение только из вывода, а write-only полей у провайдера Vault нет), и для современных кластеров он не нужен.
+
+Как Vault валидирует логин без него:
+
+- **Vault внутри кластера** (`disable_local_ca_jwt = false`) — своим локальным SA-токеном, как и раньше;
+- **Vault снаружи** — самим клиентским JWT: под проекцирует TokenRequest-токен с аудиторией, роль задаёт её в `audience`.
+
+Порядок перехода:
+
+1. Убедитесь, что поды логинятся проекционными токенами с аудиторией и в ролях задан `audience` (для in-cluster Vault ничего не нужно).
+2. Уберите `token_reviewer_jwts` из вызова модуля, обновите `?ref=`.
+3. `terraform apply` — конфиг auth-метода перезаписывается без reviewer'а, значение исчезает и из Vault, и из state.
+4. **Отзовите сам токен в кластере** (удалите Secret сервисаккаунта `vault-tokenreviewer` или весь SA): он всё ещё валиден и остаётся в старых копиях/бэкапах state.
+
+Если reviewer вам всё же необходим (легаси-клиенты с долгоживущими токенами без аудиторий) — оставайтесь на `v2.1.1`: там вход есть и задокументирован.
 
 ## Обновление с 2.0.0 на 2.1.0
 

@@ -427,19 +427,6 @@ variable "clusters" {
   }
 }
 
-variable "token_reviewer_jwts" {
-  description = <<-EOT
-    JWT сервисаккаунта vault-tokenreviewer по каждому кластеру: ключ — имя кластера.
-    Нужен долгоживущий токен (Secret типа kubernetes.io/service-account-token),
-    у SA должно быть право на system:auth-delegator.
-    Кластер, которого нет в карте, конфигурируется без reviewer JWT — тогда Vault
-    валидирует токен через сам клиентский JWT (требует TokenRequest-аудиторию).
-  EOT
-  type        = map(string)
-  default     = {}
-  sensitive   = true
-}
-
 variable "k8s_roles" {
   description = <<-EOT
     Роли kubernetes auth: { "<кластер>" = { "<роль>" = {...} } }.
@@ -447,10 +434,13 @@ variable "k8s_roles" {
     из namespaces × service_accounts.
   EOT
   type = map(map(object({
-    namespaces             = list(string)
-    service_accounts       = list(string)
-    policies               = list(string)
-    audience               = optional(string) # ожидаемый aud в JWT, если включён TokenRequest
+    namespaces       = list(string)
+    service_accounts = list(string)
+    policies         = list(string)
+    # Ожидаемый aud клиентского JWT. Модуль не настраивает reviewer JWT,
+    # поэтому Vault валидирует логин самим клиентским токеном — для
+    # TokenRequest-токенов задавайте audience и проекцируйте том с ним.
+    audience               = optional(string)
     token_ttl              = optional(number) # сек; null → default_token_ttl
     token_max_ttl          = optional(number)
     token_explicit_max_ttl = optional(number)

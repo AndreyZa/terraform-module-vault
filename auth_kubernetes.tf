@@ -27,8 +27,13 @@ resource "vault_kubernetes_auth_backend_config" "this" {
   backend            = vault_auth_backend.kubernetes[each.key].path
   kubernetes_host    = each.value.host
   kubernetes_ca_cert = each.value.ca_cert != "" ? each.value.ca_cert : null
-  token_reviewer_jwt = lookup(var.token_reviewer_jwts, each.key, null)
 
+  # Reviewer JWT модуль сознательно НЕ настраивает (убран в 3.0.0): это
+  # долгоживущий токен с auth-delegator, который к тому же ложился в state
+  # открытым текстом. Без него Vault валидирует логин через сам клиентский
+  # JWT (TokenRequest) либо через свой локальный SA-токен, когда живёт
+  # внутри кластера. Клиентским токенам нужна аудитория — задавайте
+  # audience в k8s_roles.
   # true, когда Vault живёт вне кластера: локального CA/JWT у него нет.
   disable_local_ca_jwt = each.value.disable_local_ca_jwt
 
@@ -39,11 +44,8 @@ resource "vault_kubernetes_auth_backend_config" "this" {
     }
 
     precondition {
-      condition = (
-        !each.value.disable_local_ca_jwt
-        || (each.value.ca_cert != "" && lookup(var.token_reviewer_jwts, each.key, "") != "")
-      )
-      error_message = "Кластер ${each.key}: при disable_local_ca_jwt = true Vault снаружи кластера и обязан иметь ca_cert и token_reviewer_jwts[\"${each.key}\"], иначе TokenReview вернёт 401 на каждый логин."
+      condition     = !each.value.disable_local_ca_jwt || each.value.ca_cert != ""
+      error_message = "Кластер ${each.key}: при disable_local_ca_jwt = true Vault снаружи кластера и обязан иметь ca_cert — без него TLS до API-сервера не поднимется."
     }
   }
 }

@@ -25,13 +25,6 @@ variable "vault_address" {
   type        = string
 }
 
-variable "token_reviewer_jwt" {
-  description = "JWT сервисаккаунта vault-tokenreviewer в кластере."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "cluster_ca_cert" {
   description = "PEM CA API-сервера кластера."
   type        = string
@@ -69,16 +62,15 @@ module "access" {
     }
   }
 
-  token_reviewer_jwts = {
-    "demo" = var.token_reviewer_jwt
-  }
-
   k8s_roles = {
     "demo" = {
       "demo-app" = {
         namespaces       = ["demo"]
         service_accounts = ["demo-app"]
         policies         = ["demo-app-ro"]
+        # Vault валидирует логин самим клиентским JWT (reviewer'а модуль не
+        # настраивает) — под должен проекцировать токен с этой аудиторией.
+        audience = "https://vault.example.tech"
       }
     }
   }

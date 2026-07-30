@@ -2,6 +2,30 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
 
+## [3.0.0] — 2026-07-30
+
+### Убрано (несовместимо)
+
+- **Вход `token_reviewer_jwts` удалён** — модуль больше не настраивает
+  reviewer JWT у kubernetes auth. Это был долгоживущий токен с
+  `system:auth-delegator`, который к тому же лежал в Terraform state
+  открытым текстом: `sensitive` прячет значение только из вывода, а
+  write-only атрибутов у провайдера Vault нет ни одного (проверено по
+  схеме 4.8.0). Валидация логина: Vault внутри кластера — локальным
+  SA-токеном; снаружи — самим клиентским JWT (TokenRequest-токен
+  с аудиторией, `audience` в роли).
+  Порядок перехода и отзыв старого токена — README, раздел
+  «Обновление с 2.1.x на 3.0.0». Кому reviewer необходим — `v2.1.1`.
+- Precondition кластера при `disable_local_ca_jwt = true` теперь требует
+  только `ca_cert` (раньше — ещё и reviewer JWT).
+
+### Изменено
+
+- `examples/minimal` и CI без reviewer'а; в примере у kubernetes-роли
+  показан `audience`.
+- Тестов 67 → 69: внешний кластер без `ca_cert` валит plan;
+  `token_reviewer_jwt` в конфиге auth-метода не задаётся.
+
 ## [2.1.1] — 2026-07-30
 
 Патч по итогам контрольной перепроверки 2.1.0. Поведение выданных прав

@@ -49,12 +49,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # minimal требует непустые ca_cert/reviewer JWT: его кластер живёт
+          # minimal требует непустой ca_cert: его кластер живёт
           # с disable_local_ca_jwt = true, и precondition этого требует.
           - example: minimal
             plan_args: >-
               -var vault_address=http://127.0.0.1:8200
-              -var token_reviewer_jwt=dummy
               -var cluster_ca_cert=dummy-pem
           - example: jwt
             plan_args: "-var vault_address=http://127.0.0.1:8200"
