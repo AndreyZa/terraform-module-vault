@@ -14,7 +14,7 @@ Terraform-модуль для прав доступа в Vault: политики
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.1"
 
   kv_mount   = "secret" # обязателен, дефолта нет
   kv_version = 2        # 1 или 2, должно совпадать с маунтом
@@ -106,7 +106,7 @@ module "access" {
 
 ```hcl
 module "access" {
-  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.0"
+  source = "git::https://github.com/AndreyZa/terraform-module-vault.git?ref=v2.1.1"
 
   kv_mount   = "secret"
   kv_version = 1
@@ -469,6 +469,17 @@ terraform state rm 'module.<имя>.vault_mount.kv[0]'              # для man
 terraform state rm 'module.<имя>.vault_jwt_auth_backend.this[0]' # для manage_jwt_backend
 terraform state rm 'module.<имя>.vault_auth_backend.approle[0]'  # для manage_approle_backend
 ```
+
+**Опустошение `approle_roles` — тоже destroy бэкенда.** При `manage_approle_backend = true` (дефолт) бэкенд существует, только пока есть роли, поэтому `approle_roles = {}` планирует его уничтожение и упирается в ту же ошибку. Полный демонтаж AppRole:
+
+```bash
+terraform state rm 'module.<имя>.vault_auth_backend.approle[0]'
+# в конфиге: approle_roles = {}
+terraform apply
+vault auth disable approle   # бэкенд остался в Vault — снести руками, когда точно пора
+```
+
+То же ограничение у полного удаления вызова модуля: `prevent_destroy` на KV-маунте и бэкендах остановит destroy — сначала `state rm` этих ресурсов.
 
 Kubernetes-бэкендов это не касается: удаление кластера из `clusters` — штатный teardown, он и должен удалять маунт (вместе с ролями этого кластера — убирайте их из `k8s_roles` тем же коммитом). Помните, что смена ключа кластера или `auth_path` — это тоже destroy+create.
 

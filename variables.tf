@@ -410,6 +410,21 @@ variable "clusters" {
     ])
     error_message = "clusters: default_lease_ttl / max_lease_ttl — Go-длительность вида \"1h\", \"30m\", \"1h30m\"."
   }
+
+  # auth_path: null — дефолт kubernetes/<ключ>. Пустая строка недопустима:
+  # coalesce() пропускает "" так же, как null, и путь молча подменялся бы
+  # дефолтом — конфиг выглядел бы применённым не так, как написан.
+  validation {
+    condition = alltrue([
+      for c in values(var.clusters) : c.auth_path == null || (
+        trimspace(c.auth_path) != ""
+        && !startswith(c.auth_path, "/")
+        && !endswith(c.auth_path, "/")
+        && !strcontains(c.auth_path, "//")
+      )
+    ])
+    error_message = "clusters: auth_path — либо null (дефолт kubernetes/<ключ>), либо непустой путь без слэшей по краям и без \"//\"."
+  }
 }
 
 variable "token_reviewer_jwts" {
@@ -543,8 +558,8 @@ variable "jwt_path" {
   default     = "jwt"
 
   validation {
-    condition     = trimspace(var.jwt_path) != "" && !startswith(var.jwt_path, "/") && !endswith(var.jwt_path, "/")
-    error_message = "jwt_path не может быть пустым или со слэшами по краям: роли легли бы в auth//role/…, plan прошёл бы, apply упал."
+    condition     = trimspace(var.jwt_path) != "" && !startswith(var.jwt_path, "/") && !endswith(var.jwt_path, "/") && !strcontains(var.jwt_path, "//")
+    error_message = "jwt_path не может быть пустым, со слэшами по краям или с \"//\": роли легли бы в auth//role/…, plan прошёл бы, apply упал."
   }
 }
 
@@ -669,8 +684,8 @@ variable "approle_path" {
   default     = "approle"
 
   validation {
-    condition     = trimspace(var.approle_path) != "" && !startswith(var.approle_path, "/") && !endswith(var.approle_path, "/")
-    error_message = "approle_path не может быть пустым или со слэшами по краям."
+    condition     = trimspace(var.approle_path) != "" && !startswith(var.approle_path, "/") && !endswith(var.approle_path, "/") && !strcontains(var.approle_path, "//")
+    error_message = "approle_path не может быть пустым, со слэшами по краям или с \"//\"."
   }
 }
 

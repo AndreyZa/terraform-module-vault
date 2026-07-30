@@ -177,6 +177,43 @@ run "bad_lease_ttl_format" {
   expect_failures = [var.clusters]
 }
 
+# auth_path = "": coalesce() пропускает пустые строки так же, как null, —
+# путь молча подменялся бы дефолтом kubernetes/<ключ>.
+run "empty_auth_path" {
+  command = plan
+
+  variables {
+    clusters = {
+      "c" = { host = "https://api.c:6443", disable_local_ca_jwt = false, auth_path = "" }
+    }
+  }
+
+  expect_failures = [var.clusters]
+}
+
+run "slashed_auth_path" {
+  command = plan
+
+  variables {
+    clusters = {
+      "c" = { host = "https://api.c:6443", disable_local_ca_jwt = false, auth_path = "/k8s" }
+    }
+  }
+
+  expect_failures = [var.clusters]
+}
+
+run "double_slash_in_jwt_path" {
+  command = plan
+
+  variables {
+    jwt_path  = "jwt//v2"
+    jwt_roles = { "r" = { policies = ["default"], bound_subject = "s" } }
+  }
+
+  expect_failures = [var.jwt_path]
+}
+
 ##############################################################################
 # Опечатка в capability. Неизвестное право не отбрасывалось с ошибкой, а молча
 # выпадало при сборке правил — на выходе получалась строфа capabilities = [],
